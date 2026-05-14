@@ -56,24 +56,33 @@ class BaseEasyApplier(ABC):
         return False
 
     async def _create_and_upload_resume(self, element: Any, job: Job) -> None:
+        file_path_pdf = await self._resolve_resume_upload_path(job)
+
+        try:
+            abs_path = os.path.abspath(file_path_pdf)
+            await element.set_input_files(abs_path)
+            self.submitted_resume_path = abs_path
+            await async_pause(1, 2)
+            logger.debug(f"Resume created and uploaded successfully: {file_path_pdf}")
+        except Exception:
+            tb_str = traceback.format_exc()
+            logger.error(f"Resume upload failed: {tb_str}")
+            await debug_capture(self.page, "resume_upload_error")
+            raise Exception(f"Upload failed: \nTraceback:\n{tb_str}")
+
+    async def _resolve_resume_upload_path(self, job: Job) -> str:
+        """Generate or resolve the resume file path to upload."""
         try:
             os.makedirs(self.generated_resume_dir, exist_ok=True)
         except Exception as e:
             logger.error(f"Failed to create directory: {self.generated_resume_dir}. Error: {e}")
             raise
 
-        if self.ready_made_resume_path is not None:
-            file_path_pdf = os.path.abspath(str(self.ready_made_resume_path))
-            logger.info(f"Using ready-made resume: {file_path_pdf}")
-        else:
-            generator_ready = (
-                getattr(self, "resume_generator_manager", None) is not None
-                and getattr(self.resume_generator_manager, "selected_style", None) is not None
-            )
-            if not generator_ready:
-                raise NoInfoException(
-                    "No resume generator style selected and no ready-made resume configured"
-                )
+        generator_ready = (
+            getattr(self, "resume_generator_manager", None) is not None
+            and getattr(self.resume_generator_manager, "selected_style", None) is not None
+        )
+        if generator_ready:
             file_path_pdf = os.path.join(
                 self.generated_resume_dir, f"CV_{job.company_name}_{job.job_title}.pdf"
             )
@@ -111,6 +120,13 @@ class BaseEasyApplier(ABC):
                             await async_pause(20, 40)
                         else:
                             raise
+        elif self.ready_made_resume_path is not None:
+            file_path_pdf = os.path.abspath(str(self.ready_made_resume_path))
+            logger.info(f"Using ready-made resume: {file_path_pdf}")
+        else:
+            raise NoInfoException(
+                "No resume generator style selected and no ready-made resume configured"
+            )
 
         file_size = os.path.getsize(file_path_pdf)
         max_file_size = 2 * 1024 * 1024  # 2 MB
@@ -125,17 +141,7 @@ class BaseEasyApplier(ABC):
                 "Resume file format is not allowed. Only PDF, DOC, and DOCX formats are supported."
             )
 
-        try:
-            abs_path = os.path.abspath(file_path_pdf)
-            await element.set_input_files(abs_path)
-            self.submitted_resume_path = abs_path
-            await async_pause(1, 2)
-            logger.debug(f"Resume created and uploaded successfully: {file_path_pdf}")
-        except Exception:
-            tb_str = traceback.format_exc()
-            logger.error(f"Resume upload failed: {tb_str}")
-            await debug_capture(self.page, "resume_upload_error")
-            raise Exception(f"Upload failed: \nTraceback:\n{tb_str}")
+        return os.path.abspath(file_path_pdf)
 
     async def _process_form_section(self, section: Any) -> None:
         """Process form section by dispatching to appropriate handler (async)"""

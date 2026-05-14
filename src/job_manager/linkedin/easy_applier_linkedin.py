@@ -5,7 +5,7 @@ import sys
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from playwright.sync_api import Page
 from reportlab.lib.pagesizes import A4
@@ -32,6 +32,112 @@ from src.utils.utils import (
     load_yaml_file,
     sanitize_text,
 )
+
+
+class SelectorVariant(NamedTuple):
+    selector: str
+    selector_type: str
+    variant: str
+
+
+EASY_APPLY_BUTTON_SELECTORS = [
+    SelectorVariant(
+        "button[aria-label*='Easy Apply']", "css selector", "sdui_aria_easy_apply_button"
+    ),
+    SelectorVariant("button:has-text('Easy Apply')", "css selector", "text_easy_apply_button"),
+    SelectorVariant(
+        "//button[contains(@aria-label, 'Easy Apply') or .//span[normalize-space()='Easy Apply']]",
+        "xpath",
+        "xpath_easy_apply_button",
+    ),
+]
+
+EASY_APPLY_MODAL_SELECTORS = [
+    SelectorVariant(
+        "div[role='main'][data-sdui-screen*='EasyApply']",
+        "css selector",
+        "sdui_easy_apply_main",
+    ),
+    SelectorVariant("[data-sdui-screen*='EasyApply']", "css selector", "sdui_easy_apply_any"),
+    SelectorVariant(
+        ".jobs-easy-apply-modal__content", "css selector", "legacy_jobs_easy_apply_modal"
+    ),
+    SelectorVariant(".artdeco-modal__content", "css selector", "legacy_artdeco_modal"),
+    SelectorVariant(
+        "//*[contains(@class, 'jobs-easy-apply-modal__content')]",
+        "xpath",
+        "xpath_legacy_jobs_easy_apply_modal",
+    ),
+    SelectorVariant(
+        "//*[contains(@data-sdui-screen, 'EasyApply')]",
+        "xpath",
+        "xpath_sdui_easy_apply_any",
+    ),
+    SelectorVariant(
+        "//*[@role='main' and contains(@data-sdui-screen, 'EasyApply')]",
+        "xpath",
+        "xpath_sdui_easy_apply_main",
+    ),
+]
+
+EASY_APPLY_FORM_SECTION_SELECTORS = [
+    SelectorVariant(
+        "div:has(> p):has(> div > div > input), "
+        "div:has(> p):has(> div > div > textarea), "
+        "div:has(> p):has(> div > div > select), "
+        "div:has(> p):has(> fieldset)",
+        "css selector",
+        "sdui_question_container",
+    ),
+    SelectorVariant(".fb-dash-form-element", "css selector", "legacy_fb_dash_form_element"),
+    SelectorVariant(
+        "xpath=.//*[contains(@class, 'jobs-easy-apply-form-section__group')]",
+        "css selector",
+        "legacy_jobs_form_section_group",
+    ),
+    SelectorVariant(
+        "label[for]:has(+ div select), label[for]:has(+ div input), label[for]:has(+ div textarea)",
+        "css selector",
+        "sdui_labelled_input_section",
+    ),
+]
+
+EASY_APPLY_UPLOAD_SECTION_SELECTORS = [
+    SelectorVariant(
+        "div:has(> p):has(> fieldset):has-text('Resume'), fieldset:has-text('Upload resume')",
+        "css selector",
+        "sdui_resume_upload_section",
+    ),
+    SelectorVariant(
+        "div:has(p:has-text('Resume')):has(button:has-text('Upload resume')), "
+        "div:has(p:has-text('Select or upload a resume')):has(fieldset)",
+        "css selector",
+        "sdui_resume_page_section",
+    ),
+    SelectorVariant(
+        ".js-jobs-document-upload__container", "css selector", "legacy_document_upload_container"
+    ),
+]
+
+EASY_APPLY_FILE_INPUT_SELECTORS = [
+    SelectorVariant("input[type='file']", "css selector", "file_input"),
+]
+
+EASY_APPLY_NEXT_OR_SUBMIT_SELECTORS = [
+    SelectorVariant(
+        "button:has-text('Next'), button:has-text('Review'), button:has-text('Submit application')",
+        "css selector",
+        "sdui_button_text",
+    ),
+    SelectorVariant(".artdeco-button__text", "css selector", "legacy_artdeco_button_text"),
+    SelectorVariant(
+        "//button[.//span[normalize-space()='Next' or normalize-space()='Review' "
+        "or normalize-space()='Submit application'] or normalize-space()='Next' "
+        "or normalize-space()='Review' or normalize-space()='Submit application']",
+        "xpath",
+        "xpath_next_review_submit_button",
+    ),
+]
 
 
 class LinkedInEasyApplier(BaseEasyApplier):
@@ -244,22 +350,33 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 logger.warning("Easy Apply daily limit detected while searching for button")
                 return None
 
-            easy_apply_selectors = [
-                '//a[contains(., "Apply")]',
-            ]
+            for variant in EASY_APPLY_BUTTON_SELECTORS:
+                easy_apply_buttons = await find_elements_safely(
+                    self.page, variant.selector, variant.selector_type
+                )
 
-            for selector in easy_apply_selectors:
-                easy_apply_buttons = await find_elements_safely(self.page, selector, "xpath")
-
-            for button in easy_apply_buttons:
-                try:
-                    if not (await button.is_visible() and await button.is_enabled()):
-                        logger.debug("Apply button is not visible or enabled")
-                        continue
-                    await button.first.click(timeout=1000)
-                    return True
-                except Exception as e:
-                    logger.debug(f"Failed to click easy apply button: {e}")
+                for button in easy_apply_buttons:
+                    try:
+                        if not (await button.is_visible() and await button.is_enabled()):
+                            logger.debug("Easy Apply button is not visible or enabled")
+                            continue
+                        logger.debug(
+                            "Clicking Easy Apply button with "
+                            f"{variant.variant} selector: {variant.selector}"
+                        )
+                        click_target = button.first if hasattr(button, "first") else button
+                        await click_target.click(timeout=1000)
+                        if "/feed/update/" in str(self.page.url):
+                            logger.warning(
+                                "Easy Apply click navigated to a LinkedIn feed update; "
+                                f"returning to job page: {job.url}"
+                            )
+                            await self.page.goto(job.url, wait_until="domcontentloaded")
+                            await async_pause(2, 3)
+                            continue
+                        return True
+                    except Exception as e:
+                        logger.debug(f"Failed to click easy apply button: {e}")
 
             await self.check_for_premium_redirect(job)
 
@@ -304,22 +421,26 @@ class LinkedInEasyApplier(BaseEasyApplier):
     async def _find_next_or_submit_button(self) -> Any:
         """Find 'Next' or 'Submit' or 'Review' button (async)"""
         logger.info("Finding 'Next' or 'Submit' or 'Review' button")
-        # Find all elements with class="artdeco-button__text" and filter by specific text
-        elements = await find_elements_safely(self.page, ".artdeco-button__text", "css")
         target_texts = ["next", "review", "submit application"]
 
-        # Filter elements by text content
-        next_button = None
-        button_text = None
+        for variant in EASY_APPLY_NEXT_OR_SUBMIT_SELECTORS:
+            elements = await find_elements_safely(
+                self.page, variant.selector, variant.selector_type
+            )
+            logger.debug(
+                f"Found {len(elements)} next/review/submit candidates with "
+                f"{variant.variant} selector: {variant.selector}"
+            )
+            for element in elements:
+                text = (await get_clean_text(element)).strip().lower()
+                if text in target_texts:
+                    logger.debug(
+                        "Found next/review/submit button with "
+                        f"{variant.variant} selector: {text}"
+                    )
+                    return element, text
 
-        for element in elements:
-            text = await get_clean_text(element)
-            if text.lower() in target_texts:
-                next_button = element
-                button_text = text.lower()
-                break
-
-        return next_button, button_text
+        return None, None
 
     async def _next_or_submit(self) -> bool:
         """Click 'Next' or 'Submit' or 'Review' button"""
@@ -431,35 +552,8 @@ class LinkedInEasyApplier(BaseEasyApplier):
         logger.info(f"Filling up form sections for job: {job.job_title}")
 
         try:
-            # Wait for the Easy Apply modal content to be present with explicit wait
-            modal_content = None
             logger.debug("Waiting for Easy Apply modal to appear...")
-
-            # Try to wait for the modal to be visible
-            try:
-                # Wait up to 10 seconds for the modal to appear
-                await self.page.wait_for_selector(
-                    ".jobs-easy-apply-modal__content", state="visible", timeout=10000
-                )
-                logger.debug("Modal selector found via wait_for_selector")
-            except Exception as e:
-                logger.warning(f"wait_for_selector failed: {e}")
-
-            # Try multiple selectors to find the modal content
-            modal_selectors = [
-                ".jobs-easy-apply-modal__content",  # CSS selector
-                ".artdeco-modal__content",  # Fallback CSS
-                "//*[contains(@class, 'jobs-easy-apply-modal__content')]",  # XPath
-            ]
-
-            for selector in modal_selectors:
-                selector_type = (
-                    "css" if selector.startswith(".") or selector.startswith("[") else "xpath"
-                )
-                modal_content = await find_element_safely(self.page, selector, selector_type)
-                if modal_content is not None:
-                    logger.debug(f"Easy Apply modal content found with selector: {selector}")
-                    break
+            modal_content = await self._find_easy_apply_modal_content()
 
             if modal_content is None:
                 logger.error("Easy Apply modal content not found on the page with any selector")
@@ -472,18 +566,9 @@ class LinkedInEasyApplier(BaseEasyApplier):
             # Track processed file inputs to avoid duplicate processing
             processed_file_inputs = set()
 
-            # Find all form elements using the correct selectors
-            form_elements = await modal_content.locator(".fb-dash-form-element").all()
-            logger.debug(f"Found {len(form_elements)} form elements")
-
-            if not form_elements:
-                # Fallback to the old selector if new one doesn't work
-                form_elements = await modal_content.locator(
-                    "xpath=.//*[contains(@class, 'jobs-easy-apply-form-section__group')]"
-                ).all()
-                logger.debug(
-                    f"Fallback: Found {len(form_elements)} form elements with old selector"
-                )
+            form_elements = await self._find_modal_descendants(
+                modal_content, EASY_APPLY_FORM_SECTION_SELECTORS, "form elements"
+            )
 
             # Process regular form elements
             for element in form_elements:
@@ -493,18 +578,26 @@ class LinkedInEasyApplier(BaseEasyApplier):
                     raise
 
             # Also look for upload sections separately (they may not be in fb-dash-form-element)
-            upload_sections = await modal_content.locator(
-                ".js-jobs-document-upload__container"
-            ).all()
-            logger.debug(f"Found {len(upload_sections)} upload sections")
+            upload_sections = await self._find_modal_descendants(
+                modal_content, EASY_APPLY_UPLOAD_SECTION_SELECTORS, "upload sections"
+            )
+
+            if not upload_sections and await self._is_sdui_resume_section(modal_content):
+                logger.debug("Processing SDUI resume modal content as upload section")
+                upload_sections = [modal_content]
 
             for upload_section in upload_sections:
                 logger.debug("Processing upload section")
-                await self._handle_upload_fields(upload_section, job, processed_file_inputs)
+                if await self._handle_upload_fields(
+                    upload_section, job, processed_file_inputs
+                ):
+                    logger.debug("Upload section handled successfully; skipping duplicates")
+                    break
 
             # Additional fallback: look for any file inputs that might be missed
-            file_inputs = await modal_content.locator("input[type='file']").all()
-            logger.debug(f"Found {len(file_inputs)} file inputs as additional check")
+            file_inputs = await self._find_modal_descendants(
+                modal_content, EASY_APPLY_FILE_INPUT_SELECTORS, "file inputs"
+            )
 
             for file_input in file_inputs:
                 # Check if this file input was already processed
@@ -512,7 +605,9 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 if file_input_id not in processed_file_inputs:
                     logger.debug("Processing additional file input")
                     parent_container = file_input.locator("xpath=../..").first
-                    await self._handle_upload_fields(parent_container, job, processed_file_inputs)
+                    await self._handle_upload_fields(
+                        parent_container, job, processed_file_inputs
+                    )
                     processed_file_inputs.add(file_input_id)
         except NoInfoException:
             raise
@@ -522,6 +617,57 @@ class LinkedInEasyApplier(BaseEasyApplier):
             await debug_capture(self.page, "fill_up_form_error")
             # Don't re-raise the exception, just log it and continue
             logger.warning("Continuing without filling form elements due to error")
+
+    async def _find_easy_apply_modal_content(self) -> Any:
+        """Find LinkedIn Easy Apply modal content across legacy and SDUI layouts."""
+        try:
+            await self.page.wait_for_selector(
+                self._css_wait_selector(EASY_APPLY_MODAL_SELECTORS),
+                state="visible",
+                timeout=10000,
+            )
+            logger.debug("Easy Apply modal selector found via wait_for_selector")
+        except Exception as e:
+            logger.warning(f"wait_for_selector failed: {e}")
+
+        for variant in EASY_APPLY_MODAL_SELECTORS:
+            modal_content = await find_element_safely(
+                self.page, variant.selector, variant.selector_type
+            )
+            if modal_content is not None:
+                logger.debug(
+                    "Easy Apply modal content found with "
+                    f"{variant.variant} selector: {variant.selector}"
+                )
+                return modal_content
+        return None
+
+    @staticmethod
+    def _css_wait_selector(selector_variants: List[SelectorVariant]) -> str:
+        return ", ".join(
+            variant.selector
+            for variant in selector_variants
+            if variant.selector_type == "css selector"
+        )
+
+    async def _find_modal_descendants(
+        self, modal_content: Any, selector_variants: List[SelectorVariant], description: str
+    ) -> List[Any]:
+        for variant in selector_variants:
+            try:
+                elements = await modal_content.locator(variant.selector).all()
+            except Exception as e:
+                logger.debug(
+                    f"Failed finding {description} with {variant.variant} selector: {e}"
+                )
+                continue
+            logger.debug(
+                f"Found {len(elements)} {description} with "
+                f"{variant.variant} selector: {variant.selector}"
+            )
+            if elements:
+                return elements
+        return []
 
     async def _process_form_element(
         self, element: Any, job: Job, processed_file_inputs: set
@@ -631,18 +777,46 @@ class LinkedInEasyApplier(BaseEasyApplier):
         # Also check for LinkedIn-specific upload containers
         upload_containers = await element.locator(".js-jobs-document-upload__container").all()
         upload_buttons = await element.locator(".jobs-document-upload__upload-button").all()
+        is_sdui_resume_section = await self._is_sdui_resume_section(element)
 
-        is_upload = bool(file_inputs or upload_containers or upload_buttons)
+        is_upload = bool(
+            file_inputs or upload_containers or upload_buttons or is_sdui_resume_section
+        )
         logger.debug(
-            f"Element is upload field: {is_upload} (file_inputs: {len(file_inputs)}, containers: {len(upload_containers)}, buttons: {len(upload_buttons)})"
+            "Element is upload field: "
+            f"{is_upload} (file_inputs: {len(file_inputs)}, "
+            f"containers: {len(upload_containers)}, buttons: {len(upload_buttons)}, "
+            f"sdui_resume_section: {is_sdui_resume_section})"
         )
         return is_upload
 
+    async def _is_sdui_resume_section(self, element: Any) -> bool:
+        """Detect LinkedIn SDUI resume select/upload sections."""
+        try:
+            text = sanitize_text(await element.text_content() or "")
+            if "resume" not in text:
+                return False
+            if "select or upload" in text or "upload resume" in text:
+                return True
+            radios = await element.locator("input[type='radio'], [role='radio']").all()
+            return bool(radios and "pdf" in text)
+        except Exception as e:
+            logger.debug(f"Failed checking SDUI resume section: {e}")
+            return False
+
     async def _handle_upload_fields(
         self, element: Any, job: Job, processed_file_inputs: set
-    ) -> None:
+    ) -> bool:
         """Handle file upload fields (async)"""
         logger.info("Handling upload fields")
+
+        is_sdui_resume_section = await self._is_sdui_resume_section(element)
+        sdui_resume_uploaded = False
+        if is_sdui_resume_section:
+            sdui_resume_uploaded = await self._prepare_sdui_resume_upload(element, job)
+            if sdui_resume_uploaded:
+                logger.debug("SDUI resume uploaded through file chooser")
+                return True
 
         try:
             show_more_button = await find_element_safely(
@@ -666,6 +840,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
         logger.debug(f"Found {len(file_upload_elements)} file upload elements")
 
+        upload_handled = False
         for upload_element in file_upload_elements:
             try:
                 # Check if this file input was already processed
@@ -677,6 +852,8 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 # Get the parent container to determine what type of upload this is
                 parent = upload_element.locator("xpath=..").first
                 container_text = (await parent.text_content() or "").lower()
+                if is_sdui_resume_section:
+                    container_text = f"resume {container_text}".strip()
 
                 # Also check the label text if available
                 # try:
@@ -709,6 +886,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 if "image/" in accept_types or "photo" in container_text:
                     logger.info("Uploading photo")
                     await self._create_and_upload_photo(upload_element, job)
+                    upload_handled = True
                 elif "resume" in container_text:
                     logger.info("Uploading resume")
                     if (
@@ -717,11 +895,13 @@ class LinkedInEasyApplier(BaseEasyApplier):
                         is not None
                     ):
                         await self._create_and_upload_resume(upload_element, job)
+                        upload_handled = True
                     elif self.ready_made_resume_path is not None:
                         logger.info(
                             "Resume generator is not ready; falling back to ready-made resume"
                         )
                         await self._create_and_upload_resume(upload_element, job)
+                        upload_handled = True
                     else:
                         raise NoInfoException(
                             "No resume generator style selected and no ready-made resume configured"
@@ -729,6 +909,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 elif "cover" in container_text:
                     logger.info("Uploading cover letter")
                     await self._create_and_upload_cover_letter(upload_element, job)
+                    upload_handled = True
 
             except Exception as e:
                 logger.warning(f"Failed to process upload element: {e}")
@@ -736,6 +917,102 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 continue
 
         logger.debug("Finished handling upload fields")
+        return upload_handled
+
+    async def _prepare_sdui_resume_upload(self, element: Any, job: Job) -> bool:
+        """Expose SDUI resume file input or select an existing matching resume card."""
+        if self._has_resume_upload_source():
+            upload_button = await self._find_sdui_upload_resume_button(element)
+            if upload_button:
+                try:
+                    if await self._upload_resume_with_file_chooser(upload_button, job):
+                        return True
+                except Exception as e:
+                    logger.warning(f"Failed uploading SDUI resume via file chooser: {e}")
+
+                try:
+                    await upload_button.click(timeout=1000)
+                    await async_pause(1, 2)
+                    logger.debug("Clicked SDUI Upload resume button")
+                except Exception as e:
+                    logger.warning(f"Failed to click SDUI Upload resume button: {e}")
+            return False
+
+        if await self._select_matching_sdui_resume_card(element, job):
+            return True
+        return False
+
+    async def _upload_resume_with_file_chooser(self, upload_button: Any, job: Job) -> bool:
+        """Upload a generated/custom resume when SDUI opens a browser file chooser."""
+        try:
+            resume_path = await self._resolve_resume_upload_path(job)
+            async with self.page.expect_file_chooser(timeout=3000) as file_chooser_info:
+                await upload_button.click(timeout=1000)
+            file_chooser = await file_chooser_info.value
+            await file_chooser.set_files(resume_path)
+            self.submitted_resume_path = resume_path
+            await async_pause(1, 2)
+            logger.info(f"Resume uploaded through SDUI file chooser: {resume_path}")
+            return True
+        except Exception as e:
+            logger.debug(f"SDUI file chooser upload unavailable: {e}")
+            return False
+
+    def _has_resume_upload_source(self) -> bool:
+        return bool(
+            self.ready_made_resume_path is not None
+            or (
+                self.resume_generator_manager is not None
+                and getattr(self.resume_generator_manager, "selected_style", None) is not None
+            )
+        )
+
+    async def _find_sdui_upload_resume_button(self, element: Any) -> Optional[Any]:
+        selectors = [
+            "button:has-text('Upload resume')",
+            "[role='button']:has-text('Upload resume')",
+            "xpath=.//button[.//*[normalize-space()='Upload resume'] or normalize-space()='Upload resume']",
+        ]
+        for selector in selectors:
+            try:
+                selector_type = "xpath" if selector.startswith("xpath=") else "css selector"
+                clean_selector = selector.removeprefix("xpath=")
+                upload_button = await find_element_safely(
+                    element, clean_selector, selector_type, timeout=1000
+                )
+                if upload_button:
+                    return upload_button
+            except Exception as e:
+                logger.debug(f"Failed finding SDUI upload button with {selector}: {e}")
+        return None
+
+    async def _select_matching_sdui_resume_card(self, element: Any, job: Job) -> bool:
+        expected_names = self._expected_resume_file_names(job)
+        if not expected_names:
+            return False
+
+        radios = await element.locator("input[type='radio'], [role='radio']").all()
+        for radio in radios:
+            try:
+                option_text = await self._extract_radio_option_text(element, radio)
+                option_text_normalized = sanitize_text(option_text)
+                if not any(name in option_text_normalized for name in expected_names):
+                    continue
+
+                await self._click_radio_safely(element, radio)
+                logger.info(f"Selected existing SDUI resume card: {option_text}")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed selecting SDUI resume card: {e}")
+        return False
+
+    def _expected_resume_file_names(self, job: Job) -> List[str]:
+        names = []
+        if self.ready_made_resume_path is not None:
+            names.append(sanitize_text(Path(self.ready_made_resume_path).name))
+        generated_name = f"CV_{job.company_name}_{job.job_title}.pdf"
+        names.append(sanitize_text(generated_name))
+        return [name for name in names if name]
 
     async def _create_and_upload_photo(self, element: Any, job: Job) -> None:
         """Upload a configured profile photo or fall back to the visible LinkedIn avatar."""
@@ -986,6 +1263,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
         # Look for checkboxes in the new LinkedIn form structure
         checkboxes = {}
+        checkbox_data = []
 
         # Try different selectors for checkboxes
         checkbox_selectors = [
@@ -993,14 +1271,19 @@ class LinkedInEasyApplier(BaseEasyApplier):
             ".fb-form-element__checkbox",
             # "[data-test-text-selectable-option__input]",
             "[data-test-checkbox-form-component] input[type='checkbox']",
+            "[role='checkbox']",
         ]
 
         for selector in checkbox_selectors:
             found_checkboxes = await find_elements_safely(section, selector, "css selector")
-            for checkbox in found_checkboxes:
+            for index, checkbox in enumerate(found_checkboxes):
                 checkbox_id = await checkbox.get_attribute("id")
-                if checkbox_id and checkbox_id not in checkboxes:
-                    checkboxes[checkbox_id] = checkbox
+                label_text = await self._extract_choice_option_text(section, checkbox)
+                checkbox_key = checkbox_id or f"{selector}:{sanitize_text(label_text)}:{index}"
+                if checkbox_key and checkbox_key not in checkboxes:
+                    checkboxes[checkbox_key] = checkbox
+                    if label_text:
+                        checkbox_data.append((checkbox, label_text))
 
         checkboxes = list(checkboxes.values())
 
@@ -1010,6 +1293,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
             # Extract question text from the section
             question_text = ""
             try:
+                question_text = await self._extract_section_question_text(section)
                 # Look for question text in various places
                 question_selectors = [
                     "legend",
@@ -1019,6 +1303,8 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 ]
 
                 for selector in question_selectors:
+                    if question_text:
+                        break
                     question_element = await find_element_safely(section, selector, "css selector")
                     if question_element:
                         question_text = (await question_element.text_content() or "").strip()
@@ -1055,8 +1341,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 question_text = ""
 
             # Extract checkbox options
-            checkbox_options = []
-            checkbox_data = []  # Store (checkbox, label_text) pairs
+            checkbox_options = [label_text for _, label_text in checkbox_data]
 
             for checkbox in checkboxes:
                 try:
@@ -1080,7 +1365,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                             if parent_text and parent_text != question_text:
                                 label_text = parent_text
 
-                    if label_text:
+                    if label_text and label_text not in checkbox_options:
                         checkbox_options.append(label_text)
                         checkbox_data.append((checkbox, label_text))
                         logger.debug(f"Checkbox option: '{label_text}'")
@@ -1132,11 +1417,12 @@ class LinkedInEasyApplier(BaseEasyApplier):
                     try:
                         # Check if this option was selected by LLM
                         if any(
-                            selected in label_text.lower() or label_text.lower() in selected.lower()
+                            sanitize_text(selected) in sanitize_text(label_text)
+                            or sanitize_text(label_text) in sanitize_text(selected)
                             for selected in selected_options
                             if not self._is_no_info_answer(selected)
                         ):
-                            if not await checkbox.is_checked():
+                            if not await self._is_choice_checked(checkbox):
                                 logger.info(f"Checking checkbox: {label_text}")
                                 await self._click_checkbox_safely(checkbox, section)
                                 logger.debug(f"Clicked checkbox: {label_text}")
@@ -1160,7 +1446,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                             confirm_word in label_text.lower()
                             for confirm_word in ["confirmed", "confirm", "agree", "accept"]
                         ):
-                            if not await checkbox.is_checked():
+                            if not await self._is_choice_checked(checkbox):
                                 logger.info(
                                     f"Fallback: Checking confirmation checkbox: {label_text}"
                                 )
@@ -1177,11 +1463,25 @@ class LinkedInEasyApplier(BaseEasyApplier):
     async def _click_checkbox_safely(self, checkbox: Any, section: Any) -> None:
         """Safely click a checkbox by trying the label first, then the checkbox itself (async)"""
         try:
+            for selector in [
+                "xpath=ancestor-or-self::*[@role='checkbox'][1]",
+                "xpath=ancestor::*[@role='button'][1]",
+            ]:
+                try:
+                    wrapper = checkbox.locator(selector).first
+                    if await wrapper.count() > 0:
+                        logger.debug("Clicking checkbox via SDUI wrapper")
+                        await wrapper.click(timeout=1000)
+                        return
+                except Exception:
+                    continue
+
             # First try to click the associated label
             checkbox_id = await checkbox.get_attribute("id")
             if checkbox_id:
                 label = section.locator(f"label[for='{checkbox_id}']").first
-                if label:
+                label_text = (await label.text_content() or "").strip()
+                if label_text:
                     logger.debug("Clicking checkbox via label")
                     await label.click(timeout=1000)
                     return
@@ -1199,11 +1499,37 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 logger.error(f"All checkbox click attempts failed: {e2}")
                 await debug_capture(self.page, "checkbox_click_error")
 
+    async def _is_choice_checked(self, element: Any) -> bool:
+        """Return selected state for native inputs and SDUI role-based choices."""
+        try:
+            aria_checked = await element.get_attribute("aria-checked")
+            if aria_checked is not None:
+                return aria_checked.lower() == "true"
+        except Exception:
+            pass
+
+        try:
+            wrapper = element.locator(
+                "xpath=ancestor-or-self::*[@role='radio' or @role='checkbox'][1]"
+            ).first
+            if await wrapper.count() > 0:
+                aria_checked = await wrapper.get_attribute("aria-checked")
+                if aria_checked is not None:
+                    return aria_checked.lower() == "true"
+        except Exception:
+            pass
+
+        try:
+            return bool(await element.is_checked())
+        except Exception:
+            return False
+
     async def _find_and_handle_radio_question(self, section: Any) -> bool:
         """Handle radio button questions (async)"""
         # Look for radio buttons in the new LinkedIn form structure
         logger.debug("Searching for radio buttons in the section.")
         radios = {}
+        radio_data = []
 
         # Try different selectors for radio buttons
         radio_selectors = [
@@ -1215,11 +1541,21 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
         for selector in radio_selectors:
             loc = section.locator(selector)
-            ids = await loc.evaluate_all("els => els.map(e => e.id || '')")
             found_radios = await loc.all()
-            for radio, radio_id in zip(found_radios, ids):
-                if radio_id and radio_id not in radios:
-                    radios[radio_id] = radio
+            logger.debug(f"Found {len(found_radios)} radio candidates with selector: {selector}")
+            for index, radio in enumerate(found_radios):
+                try:
+                    radio_id = await radio.get_attribute("id") or ""
+                except Exception:
+                    radio_id = ""
+                option_text = await self._extract_radio_option_text(section, radio)
+                if not isinstance(option_text, str):
+                    option_text = ""
+                radio_key = radio_id or f"{selector}:{sanitize_text(option_text)}:{index}"
+                if radio_key not in radios:
+                    radios[radio_key] = radio
+                    if option_text:
+                        radio_data.append((radio, option_text))
 
         # Remove duplicates
         radios = list(radios.values())
@@ -1227,7 +1563,9 @@ class LinkedInEasyApplier(BaseEasyApplier):
         if radios:
             # Try to find the question text
             try:
-                question_text = (await section.text_content() or "").lower().strip()
+                question_text = await self._extract_section_question_text(section)
+                if not question_text:
+                    question_text = (await section.text_content() or "").lower().strip()
                 question_list = []
                 for question in question_text.split("\n"):
                     question_text = self._deduplicate_question_text(question.strip())
@@ -1239,22 +1577,11 @@ class LinkedInEasyApplier(BaseEasyApplier):
             except Exception:
                 question_text = ""
 
-            # Extract options text from radio buttons and their labels
-            options = await section.locator(",".join(radio_selectors)).evaluate_all(
-                """els => {
-                    const seen = new Set();
-                    return els.reduce((acc, e) => {
-                        if (e.id && !seen.has(e.id)) {
-                            seen.add(e.id);
-                            const lbl = document.querySelector('label[for="' + e.id + '"]');
-                            const text = (lbl?.textContent || '').trim().toLowerCase();
-                            if (text) acc.push(text);
-                        }
-                        return acc;
-                    }, []);
-                }"""
+            options = list(
+                dict.fromkeys(
+                    sanitize_text(option_text) for _, option_text in radio_data if option_text
+                )
             )
-            options = list(dict.fromkeys(options))
 
             if not options:
                 logger.debug("No options extracted from radio buttons, skipping")
@@ -1262,7 +1589,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
             cached_question = self._find_cached_question(question_text, "radio")
             if cached_question:
-                await self._select_radio(section, radios, cached_question.answer)
+                await self._select_radio(section, radio_data or radios, cached_question.answer)
                 logger.debug("Selected existing radio answer")
                 return True
 
@@ -1276,7 +1603,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
             question_data = Question(question_type="radio", question=question_text, answer=answer)
             self._save_questions(question_data)
             self.all_questions = self._load_questions()
-            await self._select_radio(section, radios, answer)
+            await self._select_radio(section, radio_data or radios, answer)
             logger.debug("Selected new radio answer")
             return True
         return False
@@ -1311,10 +1638,13 @@ class LinkedInEasyApplier(BaseEasyApplier):
                     ".fb-dash-form-element__label",
                     ".artdeco-text-input--label",
                     ".jobs-easy-apply-form-section__group-title",
+                    "xpath=.//p[normalize-space()][1]",
                 ]
 
                 for label_selector in label_selectors:
-                    label = await find_element_safely(section, label_selector, "css selector")
+                    selector_type = "xpath" if label_selector.startswith("xpath=") else "css selector"
+                    selector = label_selector.removeprefix("xpath=")
+                    label = await find_element_safely(section, selector, selector_type)
                     if label:
                         break
 
@@ -1648,29 +1978,27 @@ class LinkedInEasyApplier(BaseEasyApplier):
     async def _select_radio(self, section: Any, radios: List[Any], answer: str) -> None:
         """Select radio button based on answer (async)"""
         logger.debug(f"Selecting radio option: {answer}")
-        for radio in radios:
+        answer_normalized = sanitize_text(answer)
+        for radio_item in radios:
             try:
+                if isinstance(radio_item, tuple):
+                    radio, radio_text = radio_item
+                    radio_text = sanitize_text(radio_text)
+                else:
+                    radio = radio_item
+                    radio_text = sanitize_text(
+                        await self._extract_radio_option_text(section, radio)
+                    )
+
                 # Extract text from radio button or its associated label
-                radio_text = ""
-
-                # Look for label with matching 'for' attribute
-                radio_id = await radio.get_attribute("id")
-                if radio_id:
-                    label = section.locator(f"label[for='{radio_id}']").first
-                    radio_text = (await label.text_content() or "").strip().lower()
-
                 logger.debug(f"Radio button text extracted: '{radio_text}'")
 
-                if radio_text and (answer.lower() in radio_text or radio_text in answer.lower()):
-                    # Try different ways to click the radio button
-                    try:
-                        # First try clicking the associated label (most reliable for LinkedIn)
-                        if radio_id:
-                            await label.click(timeout=1000)
-                            logger.debug(f"Clicked radio label: {radio_text}")
-                            return
-                    except Exception:
-                        logger.warning(f"Failed to click radio button: {radio_text}")
+                if radio_text and (
+                    answer_normalized in radio_text or radio_text in answer_normalized
+                ):
+                    await self._click_radio_safely(section, radio)
+                    logger.debug(f"Clicked radio option: {radio_text}")
+                    return
 
             except Exception as e:
                 logger.warning(f"Failed to process radio button: {e}")
@@ -1678,10 +2006,154 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
         # If no match found, click the first radio button as fallback
         try:
-            await radios[0].click(timeout=1000)
+            radio = radios[0][0] if isinstance(radios[0], tuple) else radios[0]
+            await self._click_radio_safely(section, radio)
             logger.debug("Clicked first radio button as fallback")
         except Exception:
             logger.warning("Failed to click any radio button")
+
+    async def _extract_radio_option_text(self, section: Any, radio: Any) -> str:
+        """Extract visible radio option text across legacy and SDUI layouts."""
+        return await self._extract_choice_option_text(section, radio)
+
+    async def _extract_choice_option_text(self, section: Any, element: Any) -> str:
+        """Extract visible choice text across legacy and SDUI radio/checkbox layouts."""
+        for selector in [
+            "xpath=ancestor-or-self::*[@role='radio'][1]",
+            "xpath=ancestor-or-self::*[@role='checkbox'][1]",
+        ]:
+            try:
+                wrapper = element.locator(selector).first
+                if await wrapper.count() > 0:
+                    raw_wrapper_text = await wrapper.text_content()
+                    if not isinstance(raw_wrapper_text, str):
+                        continue
+                    wrapper_text = raw_wrapper_text.strip()
+                    if wrapper_text:
+                        return wrapper_text
+            except Exception:
+                continue
+
+        element_id = await element.get_attribute("id")
+        if element_id:
+            try:
+                label = section.locator(f"label[for='{element_id}']").first
+                label_text = (await label.text_content() or "").strip()
+                if label_text:
+                    return label_text
+            except Exception as e:
+                logger.debug(f"Failed extracting choice label for {element_id}: {e}")
+
+            for selector in [
+                f"xpath=.//label[@for='{element_id}']/following::*[normalize-space()][1]",
+                "xpath=ancestor::div[.//input[@type='radio']][2]//p[normalize-space()][1]",
+                "xpath=ancestor::div[.//input[@type='checkbox']][2]//p[normalize-space()][1]",
+            ]:
+                try:
+                    text_element = (
+                        section.locator(selector).first
+                        if selector.startswith("xpath=.")
+                        else element.locator(selector).first
+                    )
+                    option_text = (await text_element.text_content() or "").strip()
+                    if option_text:
+                        return option_text
+                except Exception as e:
+                    logger.debug(
+                        f"Failed extracting sibling choice text for {element_id} with {selector}: {e}"
+                    )
+
+        aria_label = await element.get_attribute("aria-label")
+        if aria_label:
+            return aria_label.strip()
+
+        try:
+            raw_element_text = await element.text_content()
+            if not isinstance(raw_element_text, str):
+                raw_element_text = ""
+            element_text = raw_element_text.strip()
+            if element_text:
+                return element_text
+        except Exception:
+            pass
+
+        parent_selectors = [
+            "xpath=ancestor::*[@role='radio'][1]",
+            "xpath=ancestor::*[@role='checkbox'][1]",
+            "xpath=ancestor::*[@role='button'][1]",
+            "xpath=ancestor::label[1]",
+            "xpath=ancestor::*[self::div or self::li][1]",
+        ]
+        for selector in parent_selectors:
+            try:
+                parent = element.locator(selector).first
+                raw_parent_text = await parent.text_content()
+                if not isinstance(raw_parent_text, str):
+                    continue
+                parent_text = raw_parent_text.strip()
+                if parent_text:
+                    return parent_text
+            except Exception:
+                continue
+        return ""
+
+    async def _click_radio_safely(self, section: Any, radio: Any) -> None:
+        """Click a radio option using label/card fallbacks."""
+        for selector in [
+            "xpath=ancestor-or-self::*[@role='radio'][1]",
+            "xpath=ancestor::*[@role='button'][1]",
+            "xpath=ancestor::label[1]",
+        ]:
+            try:
+                wrapper = radio.locator(selector).first
+                if await wrapper.count() > 0:
+                    await wrapper.click(timeout=1000)
+                    return
+            except Exception:
+                continue
+
+        radio_id = await radio.get_attribute("id")
+        if radio_id:
+            try:
+                label = section.locator(f"label[for='{radio_id}']").first
+                if await label.count() > 0:
+                    await label.click(timeout=1000)
+                    return
+            except Exception as e:
+                logger.debug(f"Failed clicking radio label for {radio_id}: {e}")
+
+            try:
+                option_row = radio.locator(
+                    "xpath=ancestor::div[.//input[@type='radio']][2]"
+                ).first
+                if await option_row.count() > 0:
+                    await option_row.click(timeout=1000)
+                    return
+            except Exception as e:
+                logger.debug(f"Failed clicking SDUI radio row for {radio_id}: {e}")
+
+        await radio.click(timeout=1000)
+
+    async def _extract_section_question_text(self, section: Any) -> str:
+        """Extract the question prompt without including SDUI choice option text."""
+        selectors = [
+            "xpath=.//p[not(ancestor::fieldset) and normalize-space()][1]",
+            "xpath=./p[normalize-space()][1]",
+            "legend",
+        ]
+        for selector in selectors:
+            try:
+                selector_type = "xpath" if selector.startswith("xpath=") else "css selector"
+                clean_selector = selector.removeprefix("xpath=")
+                element = await find_element_safely(section, clean_selector, selector_type)
+                if element:
+                    question_text = (await element.text_content() or "").strip().lower()
+                    question_text = self._deduplicate_question_text(question_text)
+                    if question_text:
+                        return question_text
+            except Exception:
+                continue
+        return ""
 
     async def _select_dropdown_option(self, element: Any, text: str) -> None:
         """Select dropdown option by visible text using robust matching (async).

@@ -431,6 +431,20 @@ class TestIsUploadField:
         result = await applier._is_upload_field(element)
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_detects_sdui_resume_section(self, applier):
+        element = AsyncMock()
+        element.text_content = AsyncMock(
+            return_value="Resume* Select or upload a resume Upload resume CV.pdf"
+        )
+        empty_loc = AsyncMock()
+        empty_loc.all = AsyncMock(return_value=[])
+        element.locator = MagicMock(return_value=empty_loc)
+
+        result = await applier._is_upload_field(element)
+
+        assert result is True
+
 
 class TestAlreadyAppliedDetection:
     @pytest.mark.asyncio
@@ -586,6 +600,349 @@ class TestUploadFields:
             await applier._handle_upload_fields(element, job, set())
 
         applier._create_and_upload_photo.assert_called_once_with(upload_element, job)
+
+    @pytest.mark.asyncio
+    async def test_sdui_resume_upload_button_exposes_file_input(self, applier):
+        applier.resume_generator_manager.selected_style = "modern"
+        upload_button = AsyncMock()
+        upload_element = AsyncMock()
+
+        async def get_attribute_side_effect(name):
+            if name == "id":
+                return "sdui-resume-upload"
+            if name == "accept":
+                return ".pdf,.doc,.docx"
+            return None
+
+        upload_element.get_attribute.side_effect = get_attribute_side_effect
+        upload_element.evaluate = AsyncMock()
+        parent = AsyncMock()
+        parent.text_content = AsyncMock(return_value="Resume")
+        upload_element.locator = MagicMock(return_value=MagicMock(first=parent))
+
+        element = AsyncMock()
+        element.text_content = AsyncMock(
+            return_value="Resume* Select or upload a resume Upload resume"
+        )
+        empty_locator = MagicMock()
+        empty_locator.all = AsyncMock(return_value=[])
+        file_locator = MagicMock()
+        file_locator.all = AsyncMock(return_value=[upload_element])
+
+        def element_locator(selector):
+            if selector == "xpath=.//input[@type='file']":
+                return file_locator
+            return empty_locator
+
+        element.locator = MagicMock(side_effect=element_locator)
+        applier._find_sdui_upload_resume_button = AsyncMock(return_value=upload_button)
+        applier._create_and_upload_resume = AsyncMock()
+        job = Job(job_title="Engineer", company_name="Tech")
+
+        with patch(
+            "src.job_manager.linkedin.easy_applier_linkedin.find_element_safely",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await applier._handle_upload_fields(element, job, set())
+
+        upload_button.click.assert_awaited_once()
+        applier._create_and_upload_resume.assert_called_once_with(upload_element, job)
+
+    @pytest.mark.asyncio
+    async def test_uploads_sdui_resume_through_file_chooser(self, applier):
+        upload_button = AsyncMock()
+        file_chooser = AsyncMock()
+
+        class FakeFileChooserContext:
+            async def __aenter__(self):
+                value = AsyncMock(return_value=file_chooser)
+                return MagicMock(value=value())
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        applier.page.expect_file_chooser = MagicMock(return_value=FakeFileChooserContext())
+        applier._resolve_resume_upload_path = AsyncMock(return_value="/tmp/generated.pdf")
+        job = Job(job_title="Engineer", company_name="Tech")
+
+        with patch(
+            "src.job_manager.linkedin.easy_applier_linkedin.async_pause",
+            new_callable=AsyncMock,
+        ):
+            result = await applier._upload_resume_with_file_chooser(upload_button, job)
+
+        assert result is True
+        upload_button.click.assert_awaited_once()
+        file_chooser.set_files.assert_awaited_once_with("/tmp/generated.pdf")
+        assert applier.submitted_resume_path == "/tmp/generated.pdf"
+
+    @pytest.mark.asyncio
+    async def test_generates_resume_before_ready_made_when_generator_ready(
+        self, applier, tmp_path
+    ):
+        ready_made_resume = tmp_path / "existing.pdf"
+        ready_made_resume.write_bytes(b"existing")
+        applier.ready_made_resume_path = ready_made_resume
+        applier.resume_generator_manager.selected_style = "modern"
+        applier.resume_generator_manager.pdf_base64 = AsyncMock(return_value="Z2VuZXJhdGVk")
+
+        job = Job(job_title="Engineer", company_name="Tech")
+
+        result = await applier._resolve_resume_upload_path(job)
+
+        assert result.endswith("CV_Tech_Engineer.pdf")
+        assert os.path.exists(result)
+        assert open(result, "rb").read() == b"generated"
+
+    @pytest.mark.asyncio
+    async def test_fill_up_processes_modal_as_sdui_resume_section(self, applier):
+        modal = AsyncMock()
+        applier._find_easy_apply_modal_content = AsyncMock(return_value=modal)
+        applier._find_modal_descendants = AsyncMock(side_effect=[[], [], []])
+        applier._is_sdui_resume_section = AsyncMock(return_value=True)
+        applier._handle_upload_fields = AsyncMock()
+
+        await applier._fill_up(Job(job_title="Engineer", company_name="Tech"))
+
+        applier._handle_upload_fields.assert_awaited_once()
+        assert applier._handle_upload_fields.await_args.args[0] is modal
+
+    @pytest.mark.asyncio
+    async def test_fill_up_stops_after_successful_upload_section(self, applier):
+        modal = AsyncMock()
+        first_upload_section = AsyncMock()
+        duplicate_upload_section = AsyncMock()
+        applier._find_easy_apply_modal_content = AsyncMock(return_value=modal)
+        applier._find_modal_descendants = AsyncMock(
+            side_effect=[[], [first_upload_section, duplicate_upload_section], []]
+        )
+        applier._handle_upload_fields = AsyncMock(return_value=True)
+
+        await applier._fill_up(Job(job_title="Engineer", company_name="Tech"))
+
+        applier._handle_upload_fields.assert_awaited_once()
+        assert applier._handle_upload_fields.await_args.args[0] is first_upload_section
+        assert applier._handle_upload_fields.await_args.args[1].job_title == "Engineer"
+
+
+class TestRadioQuestions:
+    @pytest.mark.asyncio
+    async def test_handles_sdui_role_radio_without_ids(self, applier):
+        yes_parent = AsyncMock()
+        no_parent = AsyncMock()
+        yes_radio = AsyncMock()
+        no_radio = AsyncMock()
+
+        async def yes_get_attribute(name):
+            return None
+
+        async def no_get_attribute(name):
+            return None
+
+        yes_radio.get_attribute.side_effect = yes_get_attribute
+        no_radio.get_attribute.side_effect = no_get_attribute
+        yes_radio.text_content = AsyncMock(return_value="Yes")
+        no_radio.text_content = AsyncMock(return_value="No")
+        yes_parent.count = AsyncMock(return_value=1)
+        no_parent.count = AsyncMock(return_value=1)
+        yes_radio.locator = MagicMock(return_value=MagicMock(first=yes_parent))
+        no_radio.locator = MagicMock(return_value=MagicMock(first=no_parent))
+
+        empty_locator = MagicMock()
+        empty_locator.evaluate_all = AsyncMock(return_value=[])
+        empty_locator.all = AsyncMock(return_value=[])
+        role_radio_locator = MagicMock()
+        role_radio_locator.evaluate_all = AsyncMock(return_value=["", ""])
+        role_radio_locator.all = AsyncMock(return_value=[yes_radio, no_radio])
+
+        section = AsyncMock()
+        section.text_content = AsyncMock(return_value="Are you authorized to work?\nYes\nNo")
+
+        def section_locator(selector):
+            if selector == "[role='radio']":
+                return role_radio_locator
+            return empty_locator
+
+        section.locator = MagicMock(side_effect=section_locator)
+        applier.gpt_answerer.select_one_answer_from_options.return_value = "yes"
+        applier._save_questions = MagicMock()
+        applier._load_questions = MagicMock(return_value=[])
+
+        result = await applier._find_and_handle_radio_question(section)
+
+        assert result is True
+        yes_parent.click.assert_awaited_once()
+        no_parent.click.assert_not_called()
+        applier.gpt_answerer.select_one_answer_from_options.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_clicks_sdui_radio_wrapper_for_nested_input(self, applier):
+        yes_wrapper = AsyncMock()
+        no_wrapper = AsyncMock()
+        yes_wrapper.count = AsyncMock(return_value=1)
+        no_wrapper.count = AsyncMock(return_value=1)
+        yes_wrapper.text_content = AsyncMock(return_value="Yes")
+        no_wrapper.text_content = AsyncMock(return_value="No")
+
+        yes_input = AsyncMock()
+        no_input = AsyncMock()
+
+        async def yes_get_attribute(name):
+            if name == "id":
+                return ":r2q:"
+            return None
+
+        async def no_get_attribute(name):
+            if name == "id":
+                return ":r2r:"
+            return None
+
+        yes_input.get_attribute.side_effect = yes_get_attribute
+        no_input.get_attribute.side_effect = no_get_attribute
+        yes_input.text_content = AsyncMock(return_value="")
+        no_input.text_content = AsyncMock(return_value="")
+
+        def empty_first_locator():
+            empty = AsyncMock()
+            empty.count = AsyncMock(return_value=0)
+            return MagicMock(first=empty)
+
+        def yes_input_locator(selector):
+            if "role='radio'" in selector:
+                return MagicMock(first=yes_wrapper)
+            return empty_first_locator()
+
+        def no_input_locator(selector):
+            if "role='radio'" in selector:
+                return MagicMock(first=no_wrapper)
+            return empty_first_locator()
+
+        yes_input.locator = MagicMock(side_effect=yes_input_locator)
+        no_input.locator = MagicMock(side_effect=no_input_locator)
+
+        empty_label = AsyncMock()
+        empty_label.text_content = AsyncMock(return_value="")
+        empty_locator = MagicMock()
+        empty_locator.evaluate_all = AsyncMock(return_value=[])
+        empty_locator.all = AsyncMock(return_value=[])
+        empty_locator.first = empty_label
+        input_locator = MagicMock()
+        input_locator.evaluate_all = AsyncMock(return_value=[":r2q:", ":r2r:"])
+        input_locator.all = AsyncMock(return_value=[yes_input, no_input])
+
+        section = AsyncMock()
+        section.text_content = AsyncMock(
+            return_value="Are you comfortable commuting to this job's location?\nYes\nNo"
+        )
+
+        def section_locator(selector):
+            if selector == "input[type='radio']":
+                return input_locator
+            return empty_locator
+
+        section.locator = MagicMock(side_effect=section_locator)
+        applier._extract_section_question_text = AsyncMock(
+            return_value="are you comfortable commuting to this job's location?"
+        )
+        applier.gpt_answerer.select_one_answer_from_options.return_value = "yes"
+        applier._save_questions = MagicMock()
+        applier._load_questions = MagicMock(return_value=[])
+
+        result = await applier._find_and_handle_radio_question(section)
+
+        assert result is True
+        yes_wrapper.click.assert_awaited_once()
+        no_wrapper.click.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_extracts_sdui_radio_text_from_empty_label_sibling(self, applier):
+        radio = AsyncMock()
+        radio.get_attribute = AsyncMock(return_value=":r2j:")
+        empty_wrapper = AsyncMock()
+        empty_wrapper.count = AsyncMock(return_value=0)
+        radio.locator = MagicMock(return_value=MagicMock(first=empty_wrapper))
+
+        empty_label = AsyncMock()
+        empty_label.text_content = AsyncMock(return_value="")
+        sibling_text = AsyncMock()
+        sibling_text.text_content = AsyncMock(return_value="Yes")
+
+        def section_locator(selector):
+            if selector == "label[for=':r2j:']":
+                return MagicMock(first=empty_label)
+            if "following::*" in selector:
+                return MagicMock(first=sibling_text)
+            return MagicMock(first=AsyncMock())
+
+        section = AsyncMock()
+        section.locator = MagicMock(side_effect=section_locator)
+
+        result = await applier._extract_radio_option_text(section, radio)
+
+        assert result == "Yes"
+
+    @pytest.mark.asyncio
+    async def test_clicks_empty_sdui_radio_label_by_for_attribute(self, applier):
+        radio = AsyncMock()
+        radio.get_attribute = AsyncMock(return_value=":r2j:")
+        empty_wrapper = AsyncMock()
+        empty_wrapper.count = AsyncMock(return_value=0)
+        radio.locator = MagicMock(return_value=MagicMock(first=empty_wrapper))
+        label = AsyncMock()
+        label.count = AsyncMock(return_value=1)
+        section = AsyncMock()
+        section.locator = MagicMock(return_value=MagicMock(first=label))
+
+        await applier._click_radio_safely(section, radio)
+
+        label.click.assert_awaited_once()
+        radio.click.assert_not_called()
+
+
+class TestCheckboxQuestions:
+    @pytest.mark.asyncio
+    async def test_clicks_sdui_role_checkbox_wrapper(self, applier):
+        checkbox = AsyncMock()
+        checkbox.count = AsyncMock(return_value=1)
+        checkbox.text_content = AsyncMock(return_value="I agree")
+
+        async def get_attribute(name):
+            if name == "aria-checked":
+                return "false"
+            return None
+
+        checkbox.get_attribute.side_effect = get_attribute
+
+        def checkbox_locator(selector):
+            if "role='checkbox'" in selector:
+                return MagicMock(first=checkbox)
+            empty = AsyncMock()
+            empty.count = AsyncMock(return_value=0)
+            return MagicMock(first=empty)
+
+        checkbox.locator = MagicMock(side_effect=checkbox_locator)
+        section = AsyncMock()
+        section.text_content = AsyncMock(return_value="Confirm details\nI agree")
+        section.locator = MagicMock(return_value=MagicMock(first=AsyncMock()))
+        applier._extract_section_question_text = AsyncMock(return_value="confirm details")
+        applier.gpt_answerer.select_many_answers_from_options.return_value = ["i agree"]
+        applier._save_questions = MagicMock()
+
+        async def find_elements(_section, selector, _by="css selector", **_kwargs):
+            if selector == "[role='checkbox']":
+                return [checkbox]
+            return []
+
+        with patch(
+            "src.job_manager.linkedin.easy_applier_linkedin.find_elements_safely",
+            new_callable=AsyncMock,
+            side_effect=find_elements,
+        ):
+            result = await applier._find_and_handle_checkbox_question(section)
+
+        assert result is True
+        checkbox.click.assert_awaited_once()
 
 
 class TestCreateAndUploadPhoto:
