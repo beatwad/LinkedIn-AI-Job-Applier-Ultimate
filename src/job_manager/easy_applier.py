@@ -164,6 +164,15 @@ class BaseEasyApplier(ABC):
         """Save questions to YAML file"""
         question_data.question = sanitize_text(question_data.question)
 
+        if not question_data.question:
+            # An unlabelled field would be cached under an empty key and every later
+            # unlabelled field would then reuse that unrelated answer
+            logger.warning(
+                f"Not caching the answer to a question with no text "
+                f"(type: {question_data.question_type}, answer: {question_data.answer})"
+            )
+            return
+
         logger.debug(f"Checking if question data already exists: {question_data}")
         try:
             should_be_saved: bool = not self._answer_contains_company_name(question_data.answer)
@@ -198,7 +207,10 @@ class BaseEasyApplier(ABC):
         self, question_text: str, question_type: str | None = None
     ) -> Question | None:
         """Find a cached answer by exact question text, preferring the same field type."""
-        current_question_sanitized = sanitize_text(question_text)
+        current_question_sanitized = sanitize_text(question_text or "")
+        if not current_question_sanitized:
+            logger.debug("Question has no text, skipping the answer cache lookup")
+            return None
         same_type_match = None
         any_type_match = None
 

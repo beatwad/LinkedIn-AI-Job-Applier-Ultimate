@@ -304,7 +304,7 @@ class LinkedInJobManager(BaseJobManager):
                 logger.warning(f"Job is not valid for application, skipping:\n{reason}")
                 await async_pause(1, 2)
                 await self._handle_apply_result(apply_result, job)
-                return "Error"
+                return "Skip"
 
             if self._is_blacklisted(sanitize_text(company_name)):
                 apply_result = "Skip", "Vacancy in the blacklist"

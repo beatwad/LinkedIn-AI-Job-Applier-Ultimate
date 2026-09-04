@@ -908,7 +908,7 @@ class TestApplyJob:
         assert result == "Skip"
 
     @pytest.mark.asyncio
-    async def test_returns_error_for_invalid_job(self, manager, mock_page):
+    async def test_returns_skip_for_invalid_job(self, manager, mock_page):
         self._setup_manager(manager)
         empty_job = Job()
         new_page = AsyncMock()
@@ -930,7 +930,7 @@ class TestApplyJob:
         ):
             result = await manager.apply_job({"url": LINKEDIN_JOB_URL})
 
-        assert result == "Error"
+        assert result == "Skip"
 
     @pytest.mark.asyncio
     async def test_returns_limit_when_max_applies_reached(self, manager, mock_page, test_job):

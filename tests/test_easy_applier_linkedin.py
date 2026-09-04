@@ -984,6 +984,8 @@ class TestDropdownCaching:
         async def find_elements(section, selector, by="css selector", **kwargs):
             if selector == "css=select":
                 return [dropdown]
+            if selector == "label":
+                return [label]
             return []
 
         with (
@@ -1013,15 +1015,14 @@ class TestDropdownCaching:
             return_value=["Select an option", "ziad.nahas@gmail.com"]
         )
 
-        checked_locator = MagicMock()
-        checked_locator.first.text_content = AsyncMock(return_value="ziad.nahas@gmail.com")
-
-        def dropdown_locator(selector):
-            if selector == "option:checked":
-                return checked_locator
-            return option_locator
-
-        dropdown.locator = MagicMock(side_effect=dropdown_locator)
+        dropdown.locator = MagicMock(return_value=option_locator)
+        dropdown.evaluate = AsyncMock(
+            return_value={
+                "text": "ziad.nahas@gmail.com",
+                "index": 1,
+                "hasSelectedAttr": True,
+            }
+        )
 
         label = AsyncMock()
         label.text_content = AsyncMock(return_value="Email Address")
@@ -1030,6 +1031,8 @@ class TestDropdownCaching:
         async def find_elements(section, selector, by="css selector", **kwargs):
             if selector == "css=select":
                 return [dropdown]
+            if selector == "label":
+                return [label]
             return []
 
         with (

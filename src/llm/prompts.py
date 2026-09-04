@@ -88,7 +88,7 @@ Determine if the candidate is suitable for this job based on the provided inform
 - If at least one of the skills levels in resume is significanly lower than the requirements (e.g. required level is "advanced" but in resume it is "elementary"), subtract 20 points from the overall score.
 - If vacancy requires year or less of experience and candidate has 4 or more years of experience, subtract 10 points from the overall score.
 - If the job aligns with one or more of the candidate’s interests, add 10 point to the overall score.
-- If vacancy doesn't match one or more of search parameters, subtract 20 points from the overall score for each search parameter that it doesn't match.
+- If vacancy explicitly contradicts one or more of search parameters, subtract 20 points from the overall score for each search parameter that it contradicts. Only penalize an explicit conflict: if the job description simply doesn't mention a search parameter (location, work arrangement, job type, etc.), treat it as unknown and do not subtract any points for it.
 - Provide a brief justification for the score, indicating which requirements are met and which are not.
 Output format (strictly follow this format):
 Score: [numeric score]

@@ -312,13 +312,15 @@ class BaseJobManager(ABC):
             return True
         return False
 
-    def _match_seen_jobs(self, job: Job, companies: dict) -> Tuple[bool, str]:
+    def _match_seen_jobs(
+        self, job: Job, companies: dict, company_level_skip: bool = True
+    ) -> Tuple[bool, str]:
         """Check if job matches any seen job in the given companies dictionary"""
         company_name = job.company_name
         job_title = job.job_title
         for comp in companies:
             if sanitize_text(company_name) == sanitize_text(comp):
-                if self.apply_once_at_company and COLLECT_INFO_MODE is False:
+                if company_level_skip and self.apply_once_at_company and COLLECT_INFO_MODE is False:
                     logger.warning(
                         "The company has already been encountered and the setting is not to apply "
                         "again to the same company, skipping"
@@ -345,12 +347,15 @@ class BaseJobManager(ABC):
                     logger.warning("The vacancy has already been encountered, skipping")
                     return True, "The vacancy has already been encountered"
         else:
-            for companies in (
-                self.success_companies,
-                self.skipped_companies,
-                self.failed_companies,
+            # apply_once_at_company must only be enforced against companies we
+            # actually submitted an application to - a skipped or failed vacancy
+            # is no reason to write off every other vacancy of that company
+            for companies, company_level_skip in (
+                (self.success_companies, True),
+                (self.skipped_companies, False),
+                (self.failed_companies, False),
             ):
-                is_seen, reason = self._match_seen_jobs(job, companies)
+                is_seen, reason = self._match_seen_jobs(job, companies, company_level_skip)
                 if is_seen:
                     return True, reason
         return False, ""

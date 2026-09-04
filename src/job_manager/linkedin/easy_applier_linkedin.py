@@ -1693,12 +1693,28 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
                     question_text = ""
                     for label_selector in label_selectors:
-                        label = await find_element_safely(section, label_selector, "css selector")
-                        if label:
-                            question_text = (await label.text_content() or "").lower().strip()
-                            question_text = self._deduplicate_question_text(question_text)
-                            self.previous_question_texts.append(question_text)
+                        # An empty <label> must not end the search - keep going until a
+                        # selector yields actual question text
+                        labels = await find_elements_safely(section, label_selector, "css selector")
+                        for label in labels:
+                            label_text = (await label.text_content() or "").lower().strip()
+                            if label_text:
+                                question_text = self._deduplicate_question_text(label_text)
+                                break
+                        if question_text:
                             break
+
+                    if not question_text:
+                        question_text = await self._extract_accessible_name(dropdown)
+
+                    if question_text:
+                        self.previous_question_texts.append(question_text)
+                    else:
+                        logger.warning(
+                            "Dropdown has no question text; answering from options "
+                            f"alone: {options}"
+                        )
+                        await debug_capture(self.page, "dropdown_without_label")
                 except Exception as e:
                     logger.warning(f"Could not find label for dropdown: {e}")
                     question_text = ""
@@ -1753,7 +1769,12 @@ class LinkedInEasyApplier(BaseEasyApplier):
                     )
                     if current_selection != existing_answer:
                         logger.debug(f"Updating selection to: {existing_answer}")
-                        await self._select_dropdown_option(dropdown, existing_answer)
+                        if not await self._select_dropdown_option(dropdown, existing_answer):
+                            logger.warning(
+                                f"Could not select cached answer '{existing_answer}' for "
+                                f"dropdown question '{question_text}'"
+                            )
+                            return False
                 else:
                     logger.info(f"Asking question: {question_text}")
                     logger.info(f"Available options: {options}")
@@ -1766,7 +1787,12 @@ class LinkedInEasyApplier(BaseEasyApplier):
                         question_type="dropdown", question=question_text, answer=answer
                     )
                     self._save_questions(question_data)
-                    await self._select_dropdown_option(dropdown, answer)
+                    if not await self._select_dropdown_option(dropdown, answer):
+                        logger.warning(
+                            f"Could not select answer '{answer}' for dropdown question "
+                            f"'{question_text}'"
+                        )
+                        return False
                     logger.debug(f"Selected new dropdown answer: {answer}")
 
                 return True
@@ -1897,12 +1923,49 @@ class LinkedInEasyApplier(BaseEasyApplier):
         except Exception:
             logger.warning("Failed to click any radio button")
 
-    async def _select_dropdown_option(self, element: Any, text: str) -> None:
+    async def _extract_accessible_name(self, element: Any) -> str:
+        """Derive a field's question text from its accessible name (async).
+
+        LinkedIn's SDUI markup sometimes renders an empty <label>, leaving the
+        question text reachable only via aria-label/aria-labelledby.
+        """
+        try:
+            text = await element.evaluate(
+                """el => {
+                    const direct = (el.getAttribute('aria-label') || '').trim();
+                    if (direct) return direct;
+                    const ids = (el.getAttribute('aria-labelledby') || '').split(/\\s+/);
+                    for (const id of ids) {
+                        if (!id) continue;
+                        const labelled = document.getElementById(id);
+                        const text = (labelled?.textContent || '').trim();
+                        if (text) return text;
+                    }
+                    // Only look a few levels up: the modal itself carries an
+                    // aria-label ("Apply to ...") that is not the question text
+                    let node = el.parentElement;
+                    for (let depth = 0; node && depth < 4; depth++) {
+                        const name = (node.getAttribute('aria-label') || '').trim();
+                        if (name) return name;
+                        node = node.parentElement;
+                    }
+                    return '';
+                }"""
+            )
+        except Exception as e:
+            logger.debug(f"Could not read the accessible name of the element: {e}")
+            return ""
+        return self._deduplicate_question_text((text or "").lower().strip())
+
+    async def _select_dropdown_option(self, element: Any, text: str) -> bool:
         """Select dropdown option by visible text using robust matching (async).
 
         Tries exact label match, then normalized label (collapsed whitespace),
         then label without parenthetical (e.g., removes "(+1)"), and finally
         resolves to the option's 'value' when a label match is found.
+
+        Returns:
+            bool: True if an option was actually selected, False otherwise.
         """
         logger.debug(f"Selecting dropdown option: {text}")
 
@@ -1935,7 +1998,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
         # First try direct label selection with primary candidate
         try:
             await element.select_option(label=label_candidates[0], timeout=3000)
-            return
+            return True
         except Exception as e:
             logger.warning(f"Failed to select dropdown option '{text}': {e}")
             pass
@@ -1971,7 +2034,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
             if matched_value:
                 await element.select_option(value=matched_value)
-                return
+                return True
         except Exception as e:
             logger.warning(f"Failed to select dropdown option '{text}': {e}")
             pass
@@ -1980,15 +2043,17 @@ class LinkedInEasyApplier(BaseEasyApplier):
         for cand in label_candidates[1:]:
             try:
                 await element.select_option(label=cand)
-                return
+                return True
             except Exception:
                 continue
 
         try:
             await element.select_option(value=collapsed)
-            return
+            return True
         except Exception as e:
             logger.warning(f"Failed to select dropdown option '{text}': {e}")
+            await debug_capture(self.page, "dropdown_select_failed")
+            return False
 
     async def _find_all_form_errors(self) -> List[str]:
         error_selectors = [

@@ -515,7 +515,7 @@ async def send_keys_to_element(page: Page, element: Any, keys: str) -> bool:
 
 
 async def get_element_attribute_safely(
-    element: Any, selector: str, attribute: str, by: str = "css selector"
+    element: Any, selector: str, attribute: str, by: str = "css selector", timeout: int = 1000
 ) -> str:
     """Get element attribute using optimal method for browser type (async)"""
     try:
@@ -527,7 +527,9 @@ async def get_element_attribute_safely(
             child_locator = parent.locator(selector)
         else:
             return ""
-        return await child_locator.first.get_attribute(attribute) or ""
+        # Without an explicit timeout a missing element costs Playwright's 30s
+        # default, which multiplies across every selector of a fallback chain
+        return await child_locator.first.get_attribute(attribute, timeout=timeout) or ""
     except Exception as e:
         logger.debug(f"Failed to get attribute {attribute} from element {selector}: {e}")
         return ""
