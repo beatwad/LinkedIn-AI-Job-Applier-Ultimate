@@ -50,6 +50,23 @@ If True, app will try to upload a resume file.
 UPLOAD_RESUME = True
 
 """
+For Indeed only
+The Indeed domain to search on. Use the domain of the country you actually want
+results from, otherwise the search runs against the US site and returns US jobs.
+Examples: "www.indeed.com" (US), "ch.indeed.com" (Switzerland),
+"de.indeed.com" (Germany), "uk.indeed.com" (United Kingdom), "ca.indeed.com" (Canada)
+"""
+INDEED_DOMAIN = "www.indeed.com"
+
+"""
+For Indeed only
+Search radius around each configured location, in the units the chosen Indeed
+domain uses (miles on www.indeed.com, kilometres on most others).
+Set to None to keep whatever radius Indeed applies by default.
+"""
+INDEED_SEARCH_RADIUS = None
+
+"""
 In this mode app applies only the jobs with Easy Apply
 If this mode is deactivated, app will apply to the jobs with Easy Apply and try to apply to the jobs with 3rd party applications
 WARNING: applying to the jobs with 3rd party applications is not guaranteed to be successful, but is guaranteed to consume at least 10-100x more tokens

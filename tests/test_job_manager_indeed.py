@@ -393,6 +393,12 @@ class TestGoToNextPage:
                 return_value=mock_btn,
             ),
             patch.object(manager, "_dismiss_overlays", new_callable=AsyncMock),
+            patch.object(
+                manager,
+                "_current_page_signature",
+                new_callable=AsyncMock,
+                side_effect=["page-1", "page-2"],
+            ),
             patch(
                 "src.job_manager.indeed.job_manager_indeed.safe_click",
                 new_callable=AsyncMock,
@@ -432,6 +438,12 @@ class TestGoToNextPage:
                 return_value=mock_btn,
             ),
             patch.object(manager, "_dismiss_overlays", new_callable=AsyncMock),
+            patch.object(
+                manager,
+                "_current_page_signature",
+                new_callable=AsyncMock,
+                side_effect=["page-1", "page-2"],
+            ),
             patch(
                 "src.job_manager.indeed.job_manager_indeed.safe_click",
                 new_callable=AsyncMock,

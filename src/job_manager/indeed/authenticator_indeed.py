@@ -5,6 +5,7 @@ from playwright.sync_api import Page
 
 from config.logger_config import logger
 from src.job_manager.authenticator import BaseAuthenticator
+from src.job_manager.indeed import indeed_base_url
 from src.utils.browser_utils import find_element_safely, safe_click, safe_fill
 from src.utils.utils import async_pause
 
@@ -12,8 +13,9 @@ from src.utils.utils import async_pause
 class IndeedAuthenticator(BaseAuthenticator):
     """Class for Indeed login and session management"""
 
+    # secure.indeed.com serves the login flow of every country domain
     INDEED_LOGIN_URL = "https://secure.indeed.com/account/login"
-    INDEED_HOME_URL = "https://www.indeed.com/?lang=en"
+    INDEED_HOME_URL = f"{indeed_base_url()}/?lang=en"
 
     def __init__(self, page: Union[Page, any] = None):
         super().__init__(page)

@@ -17,6 +17,7 @@ from config.app_config import (
 from config.constants import COVER_LETTER_DIR, OUTPUT_DIR_INDEED, RESUME_DIR, SEARCH_CONFIG_FILE
 from config.logger_config import logger
 from src.dashboard.runtime import StopRequested, emit_event
+from src.job_manager.indeed import indeed_base_url
 from src.job_manager.indeed.easy_applier_indeed import IndeedEasyApplier
 from src.job_manager.job_manager import BaseJobManager
 from src.pydantic_models.job_models import Job
@@ -116,6 +117,10 @@ class IndeedJobManager(BaseJobManager):
             if len(vacancies) == 0:
                 if self.page_num == 0:
                     logger.warning("No vacancies found for the search query")
+                # An empty location must not end the run while other configured
+                # locations are still unsearched
+                if await self._go_to_next_search():
+                    continue
                 break
             for vacancy in vacancies:
                 # Check if execution is paused before processing each job
@@ -153,9 +158,11 @@ class IndeedJobManager(BaseJobManager):
             # break the search for vacancies if the limit is reached
             if result == "Limit" or result == "Error" or result == "Shutdown":
                 break
-            # go to the next page; stop if there are no more pages
+            # go to the next page; when the pages run out, move to the next
+            # configured search (one per location) before giving up
             if not await self._go_to_next_page():
-                break
+                if not await self._go_to_next_search():
+                    break
 
         # if result == "Limit" or result == "Error":
         #     break
@@ -163,6 +170,22 @@ class IndeedJobManager(BaseJobManager):
         logger.info(f"Applications sent: {self.success_applies_num}")
         logger.info("Ending the work.")
         await self.send_report(result)
+
+    async def _go_to_next_search(self) -> bool:
+        """Move to the next configured search URL. False when all are exhausted."""
+        go_to_next_search = getattr(self.search_component, "go_to_next_search", None)
+        if go_to_next_search is None:
+            return False
+        try:
+            if not await go_to_next_search():
+                return False
+        except Exception as e:
+            logger.warning(f"Could not start the next search: {e}")
+            await debug_capture(self.page, "next_search_error")
+            return False
+        self.page_num = 0
+        emit_event("page_changed", "Starting the next configured search", page_num=self.page_num)
+        return True
 
     async def get_vacancies_from_page(self) -> List[Any]:
         """Return all job card elements on the current page"""
@@ -363,13 +386,13 @@ class IndeedJobManager(BaseJobManager):
             if jk:
                 # Use the canonical viewjob URL so the same job always maps to the
                 # same URL regardless of which slider item or tracking URL was found.
-                job_url = f"https://www.indeed.com/viewjob?jk={jk}"
+                job_url = f"{indeed_base_url()}/viewjob?jk={jk}"
             else:
                 job_url_path = await title_el.get_attribute("href") or ""
                 job_url = (
                     job_url_path
                     if job_url_path.startswith("http")
-                    else f"https://www.indeed.com{job_url_path}"
+                    else f"{indeed_base_url()}{job_url_path}"
                 )
 
             company_el = await find_element_safely(card, INDEED_COMPANY_SELECTOR, timeout=3000)
@@ -502,6 +525,18 @@ class IndeedJobManager(BaseJobManager):
             except Exception:
                 pass
 
+    async def _current_page_signature(self) -> str:
+        """URL plus the first job card id, to tell one result page from the next"""
+        try:
+            first_card = await find_element_safely(
+                self.page, INDEED_JOB_TITLE_SELECTOR, timeout=5000
+            )
+            first_jk = (await first_card.get_attribute("data-jk") or "") if first_card else ""
+        except Exception as e:
+            logger.debug(f"Could not read the first job card of the page: {e}")
+            first_jk = ""
+        return f"{self.page.url}|{first_jk}"
+
     async def _go_to_next_page(self) -> bool:
         """Click next page button. Returns True if navigated, False if last page reached."""
         try:
@@ -509,13 +544,23 @@ class IndeedJobManager(BaseJobManager):
             if not next_btn:
                 logger.info("No next page button found - reached last page")
                 return False
+            signature_before = await self._current_page_signature()
             await self._dismiss_overlays()
             clicked = await safe_click(self.page, INDEED_NEXT_PAGE_SELECTOR, timeout=5000)
             if not clicked:
                 logger.debug("Normal click failed, retrying with force")
                 await next_btn.click(force=True, timeout=5000)
-            await self.page.wait_for_load_state("domcontentloaded")
+            try:
+                await self.page.wait_for_load_state("domcontentloaded")
+            except Exception as e:
+                # The click often advances the page without the load state ever
+                # settling; the page content itself decides whether it worked
+                logger.debug(f"Waiting for the next page to load timed out: {e}")
             await async_pause(1, 2)
+            if await self._current_page_signature() == signature_before:
+                logger.warning("Next page button was clicked but the results did not change")
+                await debug_capture(self.page, "next_page_not_changed")
+                return False
             self.page_num += 1
             logger.info(f"Moved to page {self.page_num + 1}")
             emit_event(

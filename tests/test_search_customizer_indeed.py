@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from src.job_manager.indeed.search_customizer_indeed import INDEED_BASE_URL, IndeedSearchCustomizer
+from src.job_manager.indeed.search_customizer_indeed import IndeedSearchCustomizer, indeed_base_url
 
 MODULE = "src.job_manager.indeed.search_customizer_indeed"
 
@@ -51,7 +51,7 @@ def _parse_url(url: str):
 class TestBuildSearchUrl:
     def test_base_url_prefix(self, customizer):
         url = customizer._build_search_url("Python Developer")
-        assert url.startswith(INDEED_BASE_URL)
+        assert url.startswith(indeed_base_url())
 
     def test_encodes_position(self, customizer):
         url = customizer._build_search_url("Data Scientist")
@@ -165,121 +165,6 @@ class TestBuildSearchUrl:
 
 
 # ---------------------------------------------------------------------------
-# _set_max_distance
-# ---------------------------------------------------------------------------
-
-
-class TestSetMaxDistance:
-    @pytest.mark.asyncio
-    async def test_skips_when_button_not_visible(self, customizer, mock_page):
-        mock_btn = AsyncMock()
-        mock_btn.is_visible = AsyncMock(return_value=False)
-        mock_page.locator = MagicMock(return_value=mock_btn)
-
-        with patch(f"{MODULE}.async_pause") as mock_pause:
-            await customizer._set_max_distance()
-
-        mock_pause.assert_not_called()
-        mock_btn.click.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_clicks_last_distance_option(self, customizer, mock_page):
-        mock_btn = AsyncMock()
-        mock_btn.is_visible = AsyncMock(return_value=True)
-
-        mock_option_0 = AsyncMock()
-        mock_option_1 = AsyncMock()
-        mock_option_2 = AsyncMock()
-
-        mock_options = AsyncMock()
-        mock_options.count = AsyncMock(return_value=3)
-        mock_options.nth = MagicMock(
-            side_effect=lambda i: [mock_option_0, mock_option_1, mock_option_2][i]
-        )
-
-        mock_listbox = AsyncMock()
-        mock_listbox.locator = MagicMock(return_value=mock_options)
-
-        mock_listbox_chain = AsyncMock()
-        mock_listbox_chain.first = mock_listbox
-
-        mock_update_btn = AsyncMock()
-        mock_update_btn.last = AsyncMock()
-
-        def locator_side_effect(selector):
-            if "radius_filter_button" in selector:
-                return mock_btn
-            if "listbox" in selector or "Distance options" in selector:
-                return mock_listbox_chain
-            if "Update" in selector:
-                return mock_update_btn
-            return AsyncMock()
-
-        mock_page.locator = MagicMock(side_effect=locator_side_effect)
-
-        with patch(f"{MODULE}.async_pause"):
-            await customizer._set_max_distance()
-
-        mock_option_2.click.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_skips_click_when_no_options(self, customizer, mock_page):
-        mock_btn = AsyncMock()
-        mock_btn.is_visible = AsyncMock(return_value=True)
-
-        mock_options = AsyncMock()
-        mock_options.count = AsyncMock(return_value=0)
-
-        mock_listbox = AsyncMock()
-        mock_listbox.locator = MagicMock(return_value=mock_options)
-
-        mock_listbox_chain = AsyncMock()
-        mock_listbox_chain.first = mock_listbox
-
-        mock_update_btn = AsyncMock()
-        mock_update_btn.last = AsyncMock()
-
-        def locator_side_effect(selector):
-            if "radius_filter_button" in selector:
-                return mock_btn
-            if "listbox" in selector or "Distance options" in selector:
-                return mock_listbox_chain
-            if "Update" in selector:
-                return mock_update_btn
-            return AsyncMock()
-
-        mock_page.locator = MagicMock(side_effect=locator_side_effect)
-
-        with patch(f"{MODULE}.async_pause"):
-            await customizer._set_max_distance()
-
-        mock_options.nth.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_skips_when_listbox_not_found(self, customizer, mock_page):
-        mock_btn = AsyncMock()
-        mock_btn.is_visible = AsyncMock(return_value=True)
-
-        mock_listbox_first = AsyncMock()
-        mock_listbox_first.wait_for = AsyncMock(side_effect=Exception("timeout"))
-
-        mock_listbox_chain = AsyncMock()
-        mock_listbox_chain.first = mock_listbox_first
-
-        def locator_side_effect(selector):
-            if "radius_filter_button" in selector:
-                return mock_btn
-            if "listbox" in selector or "Distance options" in selector:
-                return mock_listbox_chain
-            return AsyncMock()
-
-        mock_page.locator = MagicMock(side_effect=locator_side_effect)
-
-        with patch(f"{MODULE}.async_pause"):
-            await customizer._set_max_distance()
-
-
-# ---------------------------------------------------------------------------
 # set_search_params
 # ---------------------------------------------------------------------------
 
@@ -287,15 +172,12 @@ class TestSetMaxDistance:
 class TestSetSearchParams:
     @pytest.mark.asyncio
     async def test_navigates_to_built_url(self, customizer, mock_page):
-        with (
-            patch(f"{MODULE}.async_pause"),
-            patch.object(customizer, "_set_max_distance", new_callable=AsyncMock),
-        ):
+        with patch(f"{MODULE}.async_pause"):
             await customizer.set_search_params()
 
         mock_page.goto.assert_called_once()
         call_url = mock_page.goto.call_args[0][0]
-        assert call_url.startswith(INDEED_BASE_URL)
+        assert call_url.startswith(indeed_base_url())
         assert (
             "Software+Engineer" in call_url
             or "Software%20Engineer" in call_url
@@ -303,19 +185,21 @@ class TestSetSearchParams:
         )
 
     @pytest.mark.asyncio
-    async def test_uses_first_position_and_location(self, customizer, mock_page):
+    async def test_queries_every_position_and_builds_a_search_per_location(
+        self, customizer, mock_page
+    ):
         customizer.positions = ["Data Scientist", "ML Engineer"]
         customizer.locations = ["Berlin", "Munich"]
 
-        with (
-            patch(f"{MODULE}.async_pause"),
-            patch.object(customizer, "_set_max_distance", new_callable=AsyncMock),
-        ):
+        with patch(f"{MODULE}.async_pause"):
             await customizer.set_search_params()
 
         call_url = mock_page.goto.call_args[0][0]
-        assert "Data+Scientist" in call_url or "Data%20Scientist" in call_url or "Data" in call_url
-        assert "Berlin" in call_url
+        _, qs = _parse_url(call_url)
+        assert qs["q"] == ['"Data Scientist" OR "ML Engineer"']
+        assert qs["l"] == ["Berlin"]
+        assert len(customizer.search_urls) == 2
+        assert "Munich" in customizer.search_urls[1]
 
     @pytest.mark.asyncio
     async def test_skips_navigation_when_no_positions(self, mock_page):
@@ -332,10 +216,7 @@ class TestSetSearchParams:
         sc = IndeedSearchCustomizer(mock_page)
         sc.set_advanced_search_params({**BASE_PARAMS, "locations": []})
 
-        with (
-            patch(f"{MODULE}.async_pause"),
-            patch.object(sc, "_set_max_distance", new_callable=AsyncMock),
-        ):
+        with patch(f"{MODULE}.async_pause"):
             await sc.set_search_params()
 
         call_url = mock_page.goto.call_args[0][0]
@@ -343,21 +224,8 @@ class TestSetSearchParams:
         assert "l" not in qs
 
     @pytest.mark.asyncio
-    async def test_calls_set_max_distance(self, customizer, mock_page):
-        with (
-            patch(f"{MODULE}.async_pause"),
-            patch.object(customizer, "_set_max_distance", new_callable=AsyncMock) as mock_distance,
-        ):
-            await customizer.set_search_params()
-
-        mock_distance.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_passes_domcontentloaded_wait(self, customizer, mock_page):
-        with (
-            patch(f"{MODULE}.async_pause"),
-            patch.object(customizer, "_set_max_distance", new_callable=AsyncMock),
-        ):
+        with patch(f"{MODULE}.async_pause"):
             await customizer.set_search_params()
 
         call_kwargs = mock_page.goto.call_args[1]

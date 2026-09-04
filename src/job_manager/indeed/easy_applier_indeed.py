@@ -503,6 +503,46 @@ class IndeedEasyApplier(BaseEasyApplier):
             return
         await super()._process_form_section(section)
 
+    # Country names that differ from the option labels Indeed renders
+    _COUNTRY_ALIASES = {
+        "USA": "united states",
+        "US": "united states",
+        "UNITED STATES OF AMERICA": "united states",
+        "UK": "united kingdom",
+        "GB": "united kingdom",
+        "GREAT BRITAIN": "united kingdom",
+    }
+
+    async def _match_country_option(self, country_select: Any, country_raw: str) -> str:
+        """Resolve a resume country to one of the select's option values (async).
+
+        Matches the value (usually an ISO code such as "CH") and the visible
+        label, so any country Indeed offers is selectable. Returns "" when the
+        country is unknown or missing.
+        """
+        if not country_raw:
+            return ""
+
+        wanted = {country_raw.lower()}
+        alias = self._COUNTRY_ALIASES.get(country_raw.upper())
+        if alias:
+            wanted.add(alias)
+
+        try:
+            options = await country_select.locator("option").evaluate_all(
+                "els => els.map(e => ({value: e.value || '', label: (e.textContent || '').trim()}))"
+            )
+        except Exception as e:
+            logger.debug(f"Could not read the options of the country select: {e}")
+            return ""
+
+        for option in options:
+            if not option["value"]:
+                continue
+            if option["value"].lower() in wanted or option["label"].lower() in wanted:
+                return option["value"]
+        return ""
+
     async def _find_and_handle_hierarchical_select(self, section: Any) -> bool:
         """Handle Indeed's two-level country → state/province hierarchical select."""
         country_select = await find_element_safely(
@@ -517,15 +557,19 @@ class IndeedEasyApplier(BaseEasyApplier):
                 personal = self.gpt_answerer.resume_structured.get("personal_information", {})
 
             country_raw = str(personal.get("country", "") or "").strip()
-            # Map common country names to option values
-            country_value = "US"
-            if country_raw.upper() in ("CA", "CANADA"):
-                country_value = "CA"
-            elif country_raw.upper() in ("US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"):
-                country_value = "US"
-
             current_country = await country_select.input_value()
-            if current_country != country_value:
+            country_value = await self._match_country_option(country_select, country_raw)
+
+            if not country_value:
+                # Never fall back to a hard-coded country: an unrecognised one used
+                # to silently become the US
+                if country_raw:
+                    logger.warning(
+                        f"Country '{country_raw}' is not among the options of the country "
+                        f"select, keeping the current value '{current_country}'"
+                    )
+                country_value = current_country
+            elif current_country != country_value:
                 await country_select.select_option(value=country_value)
                 await async_pause(0.5, 1)
                 logger.debug(f"Selected country: {country_value}")

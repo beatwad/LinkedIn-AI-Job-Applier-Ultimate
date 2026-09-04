@@ -2,12 +2,13 @@
 Module for customizing Indeed job search parameters.
 """
 
-from typing import Any, Union
+from typing import Any, List, Union
 from urllib.parse import quote_plus
 
 from playwright.sync_api import Page
 
 from config.logger_config import logger
+from src.job_manager.indeed import indeed_base_url, indeed_domain, indeed_search_radius
 from src.job_manager.search_customizer import BaseSearchCustomizer
 from src.utils.utils import async_pause
 
@@ -45,13 +46,22 @@ _REMOTE_MAP = {
     "onsite": "onsite",
 }
 
-INDEED_BASE_URL = "https://www.indeed.com/jobs"
-
 
 class IndeedSearchCustomizer(BaseSearchCustomizer):
     def __init__(self, page: Union[Page, Any]):
         super().__init__(page)
-        logger.info("IndeedSearchCustomizer initialized")
+        self.search_urls: List[str] = []
+        self._search_url_index = 0
+        logger.info(f"IndeedSearchCustomizer initialized for {indeed_domain()}")
+
+    def _build_query(self) -> str:
+        """Combine every configured position into one Indeed boolean query"""
+        cleaned_positions = [
+            position.strip() for position in self.positions if position and position.strip()
+        ]
+        if len(cleaned_positions) == 1:
+            return cleaned_positions[0]
+        return " OR ".join(f'"{position}"' for position in cleaned_positions)
 
     def _build_search_url(self, position: str, location: str = "") -> str:
         """Build an Indeed search URL for a given position and location"""
@@ -59,6 +69,10 @@ class IndeedSearchCustomizer(BaseSearchCustomizer):
 
         if location:
             params.append(f"l={quote_plus(location)}")
+
+        radius = indeed_search_radius()
+        if radius is not None:
+            params.append(f"radius={radius}")
 
         # Work arrangement
         work_arrangements = []
@@ -84,31 +98,21 @@ class IndeedSearchCustomizer(BaseSearchCustomizer):
                 params.append(f"fromage={_DATE_POSTED_MAP[key]}")
                 break
 
-        return f"{INDEED_BASE_URL}?{'&'.join(params)}"
+        return f"{indeed_base_url()}/jobs?{'&'.join(params)}"
 
-    async def _set_max_distance(self) -> None:
-        """If the Distance filter button is visible, select the furthest available option."""
-        distance_btn = self.page.locator("#radius_filter_button")
-        if not await distance_btn.is_visible():
-            return
-        logger.info("Distance filter button found, selecting max distance")
-        await async_pause(1, 1.5)
-        await distance_btn.click()
-        listbox = self.page.locator('ul[aria-label="Distance options"], ul[role="listbox"]')
-        try:
-            await listbox.first.wait_for(state="visible", timeout=10000)
-            listbox = listbox.first
-        except Exception:
-            logger.warning("Distance options listbox not found, skipping distance filter")
-            return
-        options = listbox.locator('li[role="option"]')
-        count = await options.count()
-        if count > 0:
-            await options.nth(count - 1).click()
-            await async_pause(1, 2)
-        update_btn = self.page.locator('button:has-text("Update")').last
-        await update_btn.click()
-        await async_pause(1, 2)
+    def build_search_urls(self) -> List[str]:
+        """One search URL per configured location, all positions in a single query"""
+        query = self._build_query()
+        if not query:
+            return []
+        # Indeed accepts a single 'l' per search, so locations cannot be merged
+        locations = self.locations or [""]
+        return [self._build_search_url(query, location) for location in locations]
+
+    async def _goto_search_url(self, url: str) -> None:
+        logger.info(f"Navigating to Indeed search: {url}")
+        await self.page.goto(url, wait_until="domcontentloaded")
+        await async_pause(2, 3)
 
     async def set_search_params(self) -> None:
         """Navigate to the first Indeed search URL"""
@@ -116,9 +120,19 @@ class IndeedSearchCustomizer(BaseSearchCustomizer):
             logger.warning("No positions configured for Indeed search")
             return
 
-        location = self.locations[0] if self.locations else ""
-        url = self._build_search_url(self.positions[0], location)
-        logger.info(f"Navigating to Indeed search: {url}")
-        await self.page.goto(url, wait_until="domcontentloaded")
-        await async_pause(2, 3)
-        await self._set_max_distance()
+        self.search_urls = self.build_search_urls()
+        if not self.search_urls:
+            logger.warning("No positions configured for Indeed search")
+            return
+
+        self._search_url_index = 0
+        logger.info(f"Built {len(self.search_urls)} Indeed search(es)")
+        await self._goto_search_url(self.search_urls[0])
+
+    async def go_to_next_search(self) -> bool:
+        """Navigate to the next configured search. False when all are exhausted."""
+        if self._search_url_index + 1 >= len(self.search_urls):
+            return False
+        self._search_url_index += 1
+        await self._goto_search_url(self.search_urls[self._search_url_index])
+        return True

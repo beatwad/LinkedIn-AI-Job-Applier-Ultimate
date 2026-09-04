@@ -9,6 +9,8 @@
 - `TEST_MODE` — generate resumes/cover letters without submitting
 - `COLLECT_INFO_MODE` — gather stats only, no applications
 - `UPLOAD_RESUME` — (Indeed only) upload a resume file if `True`; use Indeed on-site resume if `False`
+- `INDEED_DOMAIN` — (Indeed only) country domain to search on, e.g. `"www.indeed.com"` (US, default), `"ch.indeed.com"`, `"de.indeed.com"`, `"uk.indeed.com"`
+- `INDEED_SEARCH_RADIUS` — (Indeed only) search radius around each location in the domain's units; `None` keeps Indeed's default
 - `EASY_APPLY_ONLY_MODE` — skip non-Easy Apply jobs (LinkedIn only; Indeed always uses Easy Apply flow)
 - `RESTART_EVERY_DAY` — auto-restart every 24h (LinkedIn only)
 - `READY_MADE_RESUME_PATH` — path to a ready-made resume PDF; if empty, a new resume is generated per vacancy
