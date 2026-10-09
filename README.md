@@ -18,8 +18,8 @@ This is an active fork of the original [Jobs_Applier_AI_Agent_AIHawk](https://gi
 
 ## Disclaimer
 
-This bot uses the LinkedIn and Indeed UIs to apply for jobs. Both sites frequently change their UI, so the bot may lose some of its functionality **at any time**.
-I have no time to check this bot every day, so if you face any malfunction or have some questions about bot - feel free to open issue or contact me in Telegram chat 🚀
+This bot uses the LinkedIn and Indeed UIs to apply for jobs. Both sites frequently change their UI, so the bot may lose some of its functionality **AT ANY TIME**.
+I don't have time to check this bot every day, so if you face any malfunction or have some questions about the bot - feel free to open an issue or contact me in the Telegram chat. And - **this is important** - if a malfunction happened while applying to a vacancy, **don't forget to include the URL of this vacancy**. It will help me a lot.
 
 Please ⭐ the repository if you find it useful. This is the only thing that motivates me to continue developing the project.
 
