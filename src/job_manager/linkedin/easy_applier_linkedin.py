@@ -33,6 +33,40 @@ from src.utils.utils import (
     sanitize_text,
 )
 
+# Visible text of a radio or checkbox option, lowercased. New LinkedIn SDUI markup
+# renders an empty <label> as a click target and puts the option text either in a
+# sibling node of the option's row, or on an aria-label (which may hold the question
+# text instead, so it is used only as a last resort).
+_OPTION_TEXT_JS = """e => {
+    const lbl = e.id ? document.querySelector('label[for="' + CSS.escape(e.id) + '"]') : null;
+    let text = (lbl?.textContent || '').trim();
+    const options = 'input[type="radio"], [role="radio"], input[type="checkbox"], [role="checkbox"]';
+    for (let node = e; !text && node; node = node.parentElement) {
+        if (node.querySelectorAll(options).length > 1) break;
+        text = (node.textContent || '').trim();
+    }
+    if (!text) text = (e.closest('[aria-label]')?.getAttribute('aria-label') || '').trim();
+    return text.toLowerCase();
+}"""
+
+
+class _FileChooserUpload:
+    """Adapter exposing `set_input_files` for upload controls that open a native file chooser.
+
+    LinkedIn's SDUI resume picker has no <input type="file"> in the DOM until its upload
+    control is clicked, so the click is deferred until the file is ready to be set.
+    """
+
+    def __init__(self, page: Any, trigger: Any):
+        self.page = page
+        self.trigger = trigger
+
+    async def set_input_files(self, path: str) -> None:
+        async with self.page.expect_file_chooser(timeout=5000) as chooser_info:
+            await self.trigger.click()
+        chooser = await chooser_info.value
+        await chooser.set_files(path)
+
 
 class LinkedInEasyApplier(BaseEasyApplier):
     def __init__(
@@ -380,6 +414,14 @@ class LinkedInEasyApplier(BaseEasyApplier):
                     "[contains(translate(., 'FOLLOW', 'follow'), 'follow')]",
                     "xpath",
                 )
+            if follow_checkbox is None:
+                # Newer SDUI markup: a checked <input> carrying the "Follow <Company>..."
+                # text as aria-label, followed by an empty <label> click target
+                follow_checkbox = await find_element_safely(
+                    self.page,
+                    "input[type='checkbox'][aria-label^='follow' i]:checked + label",
+                    "css",
+                )
             if follow_checkbox:
                 await follow_checkbox.click(timeout=1000)
 
@@ -655,7 +697,11 @@ class LinkedInEasyApplier(BaseEasyApplier):
     ) -> None:
         """Process form element (async)"""
         logger.debug("Processing form element")
-        if await self._is_upload_field(element):
+        if await self._is_resume_picker(element):
+            if not await self._upload_resume_via_picker(job):
+                logger.info("Falling back to selecting a saved resume")
+                await self._process_form_section(element)
+        elif await self._is_upload_field(element):
             await self._handle_upload_fields(element, job, processed_file_inputs)
         else:
             await self._process_form_section(element)
@@ -764,6 +810,48 @@ class LinkedInEasyApplier(BaseEasyApplier):
             f"Element is upload field: {is_upload} (file_inputs: {len(file_inputs)}, containers: {len(upload_containers)}, buttons: {len(upload_buttons)})"
         )
         return is_upload
+
+    async def _is_resume_picker(self, element: Any) -> bool:
+        """Detect LinkedIn's SDUI resume picker: a radio group whose options are file names."""
+        try:
+            labels = await element.locator("input[type='radio']").evaluate_all(
+                "els => els.map(e => e.getAttribute('aria-label') || '')"
+            )
+        except Exception as e:
+            logger.debug(f"Failed checking for resume picker: {e}")
+            return False
+        is_picker = bool(labels) and all(
+            re.search(r"\.(pdf|docx?)$", label.strip(), re.IGNORECASE) for label in labels
+        )
+        logger.debug(f"Element is resume picker: {is_picker} ({len(labels)} radio options)")
+        return is_picker
+
+    async def _upload_resume_via_picker(self, job: Job) -> bool:
+        """Upload the resume through the SDUI picker's upload control. Returns False on failure."""
+        scope = self.page.locator('[data-testid="dialog-content"]').first
+        if await scope.count() == 0:
+            scope = self.page
+        candidates = [
+            scope.get_by_role("button", name=re.compile(r"upload", re.IGNORECASE)),
+            scope.get_by_text(re.compile(r"^\s*upload", re.IGNORECASE)),
+        ]
+        trigger = None
+        for candidate in candidates:
+            if await candidate.count() > 0:
+                trigger = candidate.first
+                break
+        if trigger is None:
+            logger.warning(f"Resume picker upload control not found for job: {job.url}")
+            await debug_capture(self.page, "resume_picker_upload_not_found")
+            return False
+
+        logger.info("Uploading resume via resume picker")
+        try:
+            await self._create_and_upload_resume(_FileChooserUpload(self.page, trigger), job)
+        except Exception as e:
+            logger.warning(f"Failed to upload resume via resume picker for job {job.url}: {e}")
+            return False
+        return True
 
     async def _handle_upload_fields(
         self, element: Any, job: Job, processed_file_inputs: set
@@ -1223,6 +1311,11 @@ class LinkedInEasyApplier(BaseEasyApplier):
                             if role_text and role_text != question_text:
                                 label_text = role_text
 
+                    if not label_text:
+                        # Option text is a <p> sibling of the checkbox's wrapper, with no
+                        # aria-label or role="checkbox" ancestor to read it from
+                        label_text = await checkbox.evaluate(_OPTION_TEXT_JS)
+
                     if label_text:
                         checkbox_options.append(label_text)
                         checkbox_data.append((checkbox, label_text))
@@ -1424,20 +1517,14 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
             # Extract options text from radio buttons and their labels
             options = await section.locator(",".join(radio_selectors)).evaluate_all(
-                """els => {
+                "els => { const optionText = "
+                + _OPTION_TEXT_JS
+                + """;
                     const seen = new Set();
                     return els.reduce((acc, e) => {
                         if (e.id && !seen.has(e.id)) {
                             seen.add(e.id);
-                            const lbl = document.querySelector('label[for="' + e.id + '"]');
-                            let text = (lbl?.textContent || '').trim();
-                            if (!text) {
-                                // New LinkedIn SDUI markup renders an empty <label> as a
-                                // click target; the visible option text lives on the
-                                // nearest ancestor's aria-label instead
-                                text = (e.closest('[aria-label]')?.getAttribute('aria-label') || '').trim();
-                            }
-                            text = text.toLowerCase();
+                            const text = optionText(e);
                             if (text) acc.push(text);
                         }
                         return acc;
@@ -1888,16 +1975,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 radio_id = await radio.get_attribute("id")
                 if radio_id:
                     label = section.locator(f"label[for='{radio_id}']").first
-                    radio_text = (await label.text_content() or "").strip()
-                    if not radio_text:
-                        # New LinkedIn SDUI markup renders an empty <label>; the visible
-                        # option text lives on the nearest ancestor's aria-label instead
-                        radio_text = (
-                            await radio.evaluate(
-                                "e => (e.closest('[aria-label]')?.getAttribute('aria-label') || '')"
-                            )
-                        ).strip()
-                    radio_text = radio_text.lower()
+                    radio_text = await radio.evaluate(_OPTION_TEXT_JS)
 
                 logger.debug(f"Radio button text extracted: '{radio_text}'")
 
@@ -2250,7 +2328,7 @@ if __name__ == "__main__":
 
     def build_linkedin_job_url(job_url_or_id: str | None = None) -> str:
         """Build a LinkedIn job URL from a full URL, numeric ID, or default value."""
-        default_job_url = "https://www.linkedin.com/jobs/view/4147219629"
+        default_job_url = "https://www.linkedin.com/jobs/view/4460391419"
         if not job_url_or_id:
             return default_job_url
         job_url_or_id = job_url_or_id.strip()

@@ -921,9 +921,15 @@ class GPTAnswerer:
         now = datetime.now()
         msg_month = months[month_part]
         msg_day = int(day_part)
-        msg_year = now.year
-        if msg_month > now.month:
-            msg_year -= 1
+        # LinkedIn spells the year out only on messages from an earlier year
+        # ("Aug 9, 2025"); without it the message belongs to the last 12 months
+        year_part = parts[2].strip(",") if len(parts) > 2 else ""
+        if len(year_part) == 4 and year_part.isdigit():
+            msg_year = int(year_part)
+        else:
+            msg_year = now.year
+            if msg_month > now.month:
+                msg_year -= 1
 
         msg_date = datetime(msg_year, msg_month, msg_day)
         age_days = (now - msg_date).days

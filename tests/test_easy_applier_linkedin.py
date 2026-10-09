@@ -432,6 +432,77 @@ class TestIsUploadField:
         assert result is False
 
 
+def _radio_element(aria_labels):
+    radios = MagicMock()
+    radios.evaluate_all = AsyncMock(return_value=aria_labels)
+    element = MagicMock()
+    element.locator = MagicMock(return_value=radios)
+    return element
+
+
+class TestResumePicker:
+    @pytest.mark.asyncio
+    async def test_detects_radio_group_of_resume_files(self, applier):
+        element = _radio_element(["resume.pdf", "Alex_CV.PDF", "cv.docx"])
+        assert await applier._is_resume_picker(element) is True
+
+    @pytest.mark.asyncio
+    async def test_regular_radio_question_is_not_picker(self, applier):
+        element = _radio_element(["Yes", "No"])
+        assert await applier._is_resume_picker(element) is False
+
+    @pytest.mark.asyncio
+    async def test_uploads_resume_through_file_chooser(self, applier, tmp_path):
+        ready_made_resume = tmp_path / "existing.pdf"
+        ready_made_resume.write_bytes(b"existing")
+        applier.ready_made_resume_path = ready_made_resume
+
+        trigger = AsyncMock()
+        upload_button = MagicMock()
+        upload_button.count = AsyncMock(return_value=1)
+        upload_button.first = trigger
+        dialog = MagicMock()
+        dialog.count = AsyncMock(return_value=1)
+        dialog.get_by_role = MagicMock(return_value=upload_button)
+        applier.page.locator = MagicMock(return_value=MagicMock(first=dialog))
+
+        chooser = AsyncMock()
+
+        class ChooserInfo:
+            async def _value(self):
+                return chooser
+
+            @property
+            def value(self):
+                return self._value()
+
+        chooser_ctx = MagicMock()
+        chooser_ctx.__aenter__ = AsyncMock(return_value=ChooserInfo())
+        chooser_ctx.__aexit__ = AsyncMock(return_value=False)
+        applier.page.expect_file_chooser = MagicMock(return_value=chooser_ctx)
+
+        job = Job(job_title="Engineer", company_name="Tech")
+        with patch("src.job_manager.easy_applier.async_pause", new_callable=AsyncMock):
+            result = await applier._upload_resume_via_picker(job)
+
+        expected_path = os.path.abspath(str(ready_made_resume))
+        assert result is True
+        trigger.click.assert_awaited_once()
+        chooser.set_files.assert_awaited_once_with(expected_path)
+        assert applier.submitted_resume_path == expected_path
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_radio_selection_when_upload_fails(self, applier):
+        element = MagicMock()
+        applier._is_resume_picker = AsyncMock(return_value=True)
+        applier._upload_resume_via_picker = AsyncMock(return_value=False)
+        applier._process_form_section = AsyncMock()
+
+        await applier._process_form_element(element, Job(job_title="E", company_name="T"), set())
+
+        applier._process_form_section.assert_awaited_once_with(element)
+
+
 class TestAlreadyAppliedDetection:
     @pytest.mark.asyncio
     async def test_detects_application_submitted_status(self, applier):

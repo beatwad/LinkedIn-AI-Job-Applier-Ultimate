@@ -649,6 +649,23 @@ class TestJobSeenChecking:
         assert is_seen is True
         assert "vacancy has already been encountered" in reason
 
+    def test_job_is_not_seen_when_failed_before(self, job_applier):
+        """Test failed jobs are retried instead of treated as already seen"""
+        job_applier.success_companies = {}
+        job_applier.skipped_companies = {}
+        job_applier.failed_companies = {
+            "Tech Corp": [{"job_title": "Software Engineer", "url": "http://test.com"}]
+        }
+        job_applier.apply_once_at_company = True
+
+        job = Job(job_title="Software Engineer", company_name="Tech Corp")
+
+        with patch("src.job_manager.job_manager.COLLECT_INFO_MODE", False):
+            is_seen, reason = job_applier._job_is_already_seen(job)
+
+        assert is_seen is False
+        assert reason == ""
+
 
 class TestPagination:
     """Test search result pagination"""
@@ -1013,7 +1030,9 @@ class TestHandleApplyResult:
         mock_save_interesting.assert_called_once_with(job, score=82, reasoning=apply_result[1])
 
     @pytest.mark.asyncio
-    async def test_handle_apply_result_easy_apply_dialog_skip_saved_as_interesting(self, job_applier):
+    async def test_handle_apply_result_easy_apply_dialog_skip_saved_as_interesting(
+        self, job_applier
+    ):
         job_applier.applies_num = 0
         job_applier.success_applies_num = 0
         job_applier.total_applies_num = 0

@@ -349,11 +349,11 @@ class BaseJobManager(ABC):
         else:
             # apply_once_at_company must only be enforced against companies we
             # actually submitted an application to - a skipped or failed vacancy
-            # is no reason to write off every other vacancy of that company
+            # is no reason to write off every other vacancy of that company.
+            # Failed vacancies are not checked at all so they get retried
             for companies, company_level_skip in (
                 (self.success_companies, True),
                 (self.skipped_companies, False),
-                (self.failed_companies, False),
             ):
                 is_seen, reason = self._match_seen_jobs(job, companies, company_level_skip)
                 if is_seen:
