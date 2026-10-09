@@ -408,16 +408,8 @@ class TestIsUploadField:
         element = MagicMock()
         file_inputs_loc = AsyncMock()
         file_inputs_loc.all = AsyncMock(return_value=[MagicMock()])
-        upload_containers_loc = AsyncMock()
-        upload_containers_loc.all = AsyncMock(return_value=[])
-        upload_buttons_loc = AsyncMock()
-        upload_buttons_loc.all = AsyncMock(return_value=[])
         element.locator = MagicMock(
-            side_effect=lambda sel: {
-                "xpath=.//input[@type='file']": file_inputs_loc,
-                ".js-jobs-document-upload__container": upload_containers_loc,
-                ".jobs-document-upload__upload-button": upload_buttons_loc,
-            }[sel]
+            side_effect=lambda sel: {"xpath=.//input[@type='file']": file_inputs_loc}[sel]
         )
         result = await applier._is_upload_field(element)
         assert result is True

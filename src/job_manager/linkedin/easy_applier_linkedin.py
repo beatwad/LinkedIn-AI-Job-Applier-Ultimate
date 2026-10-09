@@ -50,6 +50,10 @@ _OPTION_TEXT_JS = """e => {
 }"""
 
 
+# Validation message of a text input/textarea in LinkedIn SDUI markup
+_TEXT_FIELD_ERROR_SELECTOR = '[data-testid="text-input-helper-text"] > p:not([aria-live])'
+
+
 class _FileChooserUpload:
     """Adapter exposing `set_input_files` for upload controls that open a native file chooser.
 
@@ -233,8 +237,6 @@ class LinkedInEasyApplier(BaseEasyApplier):
         try:
             # Look for the error message indicating daily limit reached
             limit_error_selectors = [
-                "//div[contains(@class, 'artdeco-inline-feedback--error')]//span[contains(@class, 'artdeco-inline-feedback__message')]",
-                "//div[contains(@class, 'artdeco-inline-feedback--error')]",
                 "//*[contains(text(), 'reached today') and contains(text(), 'Easy Apply limit')]",
                 "//*[contains(text(), 'daily submissions')]",
             ]
@@ -346,21 +348,13 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
         # Scope the search to the Easy Apply modal so page buttons with the
         # same text (e.g. search result pagination) aren't matched instead
-        modal_selectors = [
-            '[data-testid="dialog-content"]',  # New SDUI modal container
-            ".jobs-easy-apply-modal__content",
-            ".artdeco-modal__content",
-        ]
-        scope = self.page
-        for selector in modal_selectors:
-            modal_content = await find_element_safely(self.page, selector, "css")
-            if modal_content is not None:
-                scope = modal_content
-                break
+        modal_content = await find_element_safely(
+            self.page, '[data-testid="dialog-content"]', "css"
+        )
+        scope = modal_content if modal_content is not None else self.page
 
-        # New SDUI markup renders plain <button> elements with hashed classes;
-        # legacy markup exposes the label via the .artdeco-button__text span
-        elements = await find_elements_safely(scope, "button, .artdeco-button__text", "css")
+        # New SDUI markup renders plain <button> elements with hashed classes
+        elements = await find_elements_safely(scope, "button", "css")
 
         # Filter elements by text content
         next_button = None
@@ -399,21 +393,14 @@ class LinkedInEasyApplier(BaseEasyApplier):
     async def _unfollow_company(self) -> None:
         """Unfollow company checkbox (async)"""
         try:
+            # SDUI markup: the toggle is a role="checkbox" div next to "Follow <Company>
+            # to stay up to date..." text, checked by default
             follow_checkbox = await find_element_safely(
                 self.page,
-                "label[for='follow-company-checkbox']",
-                "css",
+                "//*[@role='checkbox'][@aria-checked='true']"
+                "[contains(translate(., 'FOLLOW', 'follow'), 'follow')]",
+                "xpath",
             )
-            if follow_checkbox is None:
-                # New LinkedIn SDUI markup drops the static id and renders an empty
-                # <label>; the toggle is a role="checkbox" div next to "Follow <Company>
-                # to stay up to date..." text, checked by default
-                follow_checkbox = await find_element_safely(
-                    self.page,
-                    "//*[@role='checkbox'][@aria-checked='true']"
-                    "[contains(translate(., 'FOLLOW', 'follow'), 'follow')]",
-                    "xpath",
-                )
             if follow_checkbox is None:
                 # Newer SDUI markup: a checked <input> carrying the "Follow <Company>..."
                 # text as aria-label, followed by an empty <label> click target
@@ -462,17 +449,16 @@ class LinkedInEasyApplier(BaseEasyApplier):
         """Discard application (async)"""
         logger.info("Discarding application")
         try:
-            dismiss = await find_element_safely(
-                self.page, "//*[contains(@class, 'artdeco-modal__dismiss')]", "xpath"
-            )
+            dismiss = await find_element_safely(self.page, "button[aria-label='Dismiss']", "css")
             if dismiss:
                 await dismiss.click(timeout=1000)
                 await async_pause(2, 3)
-            confirm_buttons = self.page.locator(
-                "xpath=//*[contains(@class, 'artdeco-modal__confirm-dialog-btn')]"
+            # "Save this application?" confirmation opens as a second dialog
+            discard_button = self.page.locator('[data-testid="dialog-content"]').last.get_by_role(
+                "button", name="Discard", exact=True
             )
-            if await confirm_buttons.count() > 0:
-                await confirm_buttons.first.click(timeout=1000)
+            if await discard_button.count() > 0:
+                await discard_button.first.click(timeout=1000)
                 await async_pause(2, 3)
         except Exception as e:
             logger.warning(f"Failed to discard application: {e}")
@@ -482,17 +468,16 @@ class LinkedInEasyApplier(BaseEasyApplier):
         """Save job application process (async)"""
         logger.info("Application not completed. Saving job to My Jobs, In Progess section")
         try:
-            dismiss = await find_element_safely(
-                self.page, "//*[contains(@class, 'artdeco-modal__dismiss')]", "xpath"
-            )
+            dismiss = await find_element_safely(self.page, "button[aria-label='Dismiss']", "css")
             if dismiss:
                 await dismiss.click(timeout=1000)
                 await async_pause(2, 3)
-            confirm_buttons = self.page.locator(
-                "xpath=//*[contains(@class, 'artdeco-modal__confirm-dialog-btn')]"
+            # "Save this application?" confirmation opens as a second dialog
+            save_button = self.page.locator('[data-testid="dialog-content"]').last.get_by_role(
+                "button", name="Save", exact=True
             )
-            if await confirm_buttons.count() > 1:
-                await confirm_buttons.nth(1).click(timeout=1000)
+            if await save_button.count() > 0:
+                await save_button.first.click(timeout=1000)
                 await async_pause(2, 3)
         except Exception as e:
             logger.error(f"Failed to save application process: {e}")
@@ -560,25 +545,12 @@ class LinkedInEasyApplier(BaseEasyApplier):
             except Exception as e:
                 logger.warning(f"wait_for_selector failed: {e}")
 
-            # Try multiple selectors to find the modal content
-            modal_selectors = [
-                '[data-testid="dialog-content"]',  # New SDUI modal container
-                ".jobs-easy-apply-modal__content",  # CSS selector
-                ".artdeco-modal__content",  # Fallback CSS
-                "//*[contains(@class, 'jobs-easy-apply-modal__content')]",  # XPath
-            ]
-
-            for selector in modal_selectors:
-                selector_type = (
-                    "css" if selector.startswith(".") or selector.startswith("[") else "xpath"
-                )
-                modal_content = await find_element_safely(self.page, selector, selector_type)
-                if modal_content is not None:
-                    logger.debug(f"Easy Apply modal content found with selector: {selector}")
-                    break
+            modal_content = await find_element_safely(
+                self.page, '[data-testid="dialog-content"]', "css"
+            )
 
             if modal_content is None:
-                logger.error("Easy Apply modal content not found on the page with any selector")
+                logger.error("Easy Apply modal content not found on the page")
                 if await self._is_already_applied():
                     raise NoInfoException("Already applied to this job")
                 raise NoInfoException("Easy Apply dialog did not open")
@@ -588,71 +560,56 @@ class LinkedInEasyApplier(BaseEasyApplier):
             # Track processed file inputs to avoid duplicate processing
             processed_file_inputs = set()
 
-            # Find all form elements using the correct selectors
-            form_elements = await modal_content.locator(".fb-dash-form-element").all()
-            logger.debug(f"Found {len(form_elements)} form elements")
+            # LinkedIn's SDUI markup uses hashed, non-semantic CSS classes,
+            # so detect form sections structurally. Radio/checkbox groups (e.g. the
+            # resume picker) are wrapped in a <fieldset> and must stay one section so
+            # all options are visible together; every other <label> not inside such a
+            # fieldset is treated as its own single-field section via its parent element
+            fieldsets = await modal_content.locator("fieldset").all()
+            form_elements = [await self._widen_to_question_container(fs) for fs in fieldsets]
 
-            if not form_elements:
-                # Fallback to the old selector if new one doesn't work
-                form_elements = await modal_content.locator(
-                    "xpath=.//*[contains(@class, 'jobs-easy-apply-form-section__group')]"
-                ).all()
-                logger.debug(
-                    f"Fallback: Found {len(form_elements)} form elements with old selector"
-                )
+            labels = await modal_content.locator("label").all()
+            labeled_input_ids: set = set()
+            for label in labels:
+                try:
+                    in_fieldset = await label.locator("xpath=ancestor::fieldset").count() > 0
+                except Exception:
+                    in_fieldset = False
+                if in_fieldset:
+                    continue
+                label_container = label.locator("xpath=..").first
+                form_elements.append(label_container)
+                try:
+                    for inp in await label_container.locator(
+                        "input[type='text'], input[type='tel'], textarea"
+                    ).all():
+                        input_id = await inp.get_attribute("id")
+                        if input_id:
+                            labeled_input_ids.add(input_id)
+                except Exception:
+                    pass
 
-            if not form_elements:
-                # LinkedIn's newer SDUI markup uses hashed, non-semantic CSS classes,
-                # so fall back to structural detection. Radio/checkbox groups (e.g. the
-                # resume picker) are wrapped in a <fieldset> and must stay one section so
-                # all options are visible together; every other <label> not inside such a
-                # fieldset is treated as its own single-field section via its parent element
-                fieldsets = await modal_content.locator("fieldset").all()
-                form_elements = [await self._widen_to_question_container(fs) for fs in fieldsets]
-
-                labels = await modal_content.locator("label").all()
-                labeled_input_ids: set = set()
-                for label in labels:
-                    try:
-                        in_fieldset = await label.locator("xpath=ancestor::fieldset").count() > 0
-                    except Exception:
-                        in_fieldset = False
-                    if in_fieldset:
+            # LinkedIn's newer SDUI text-question markup has no <label> at all -
+            # the question text lives in a sibling <p>, associated to the <input>
+            # only via aria-label/aria-describedby. Pick up any text/textarea
+            # input still missed by the fieldset and label passes above.
+            orphan_inputs = await modal_content.locator(
+                "input[type='text'], input[type='tel'], textarea"
+            ).all()
+            for inp in orphan_inputs:
+                try:
+                    if await inp.locator("xpath=ancestor::fieldset").count() > 0:
                         continue
-                    label_container = label.locator("xpath=..").first
-                    form_elements.append(label_container)
-                    try:
-                        for inp in await label_container.locator(
-                            "input[type='text'], input[type='tel'], textarea"
-                        ).all():
-                            input_id = await inp.get_attribute("id")
-                            if input_id:
-                                labeled_input_ids.add(input_id)
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
+                input_id = await inp.get_attribute("id")
+                if input_id and input_id in labeled_input_ids:
+                    continue
+                form_elements.append(await self._widen_to_text_input_container(inp))
 
-                # LinkedIn's newer SDUI text-question markup has no <label> at all -
-                # the question text lives in a sibling <p>, associated to the <input>
-                # only via aria-label/aria-describedby. Pick up any text/textarea
-                # input still missed by the fieldset and label passes above.
-                orphan_inputs = await modal_content.locator(
-                    "input[type='text'], input[type='tel'], textarea"
-                ).all()
-                for inp in orphan_inputs:
-                    try:
-                        if await inp.locator("xpath=ancestor::fieldset").count() > 0:
-                            continue
-                    except Exception:
-                        pass
-                    input_id = await inp.get_attribute("id")
-                    if input_id and input_id in labeled_input_ids:
-                        continue
-                    form_elements.append(await self._widen_to_text_input_container(inp))
-
-                logger.debug(
-                    f"Structural fallback: Found {len(form_elements)} form elements "
-                    f"({len(fieldsets)} fieldsets)"
-                )
+            logger.debug(
+                f"Found {len(form_elements)} form elements " f"({len(fieldsets)} fieldsets)"
+            )
 
             # Process regular form elements
             for element in form_elements:
@@ -661,17 +618,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 except NoInfoException:
                     raise
 
-            # Also look for upload sections separately (they may not be in fb-dash-form-element)
-            upload_sections = await modal_content.locator(
-                ".js-jobs-document-upload__container"
-            ).all()
-            logger.debug(f"Found {len(upload_sections)} upload sections")
-
-            for upload_section in upload_sections:
-                logger.debug("Processing upload section")
-                await self._handle_upload_fields(upload_section, job, processed_file_inputs)
-
-            # Additional fallback: look for any file inputs that might be missed
+            # Look for any file inputs that might be missed
             file_inputs = await modal_content.locator("input[type='file']").all()
             logger.debug(f"Found {len(file_inputs)} file inputs as additional check")
 
@@ -798,17 +745,9 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
     async def _is_upload_field(self, element: Any) -> bool:
         """Check if element is upload field (async)"""
-        # Check for file input elements
         file_inputs = await element.locator("xpath=.//input[@type='file']").all()
-
-        # Also check for LinkedIn-specific upload containers
-        upload_containers = await element.locator(".js-jobs-document-upload__container").all()
-        upload_buttons = await element.locator(".jobs-document-upload__upload-button").all()
-
-        is_upload = bool(file_inputs or upload_containers or upload_buttons)
-        logger.debug(
-            f"Element is upload field: {is_upload} (file_inputs: {len(file_inputs)}, containers: {len(upload_containers)}, buttons: {len(upload_buttons)})"
-        )
+        is_upload = bool(file_inputs)
+        logger.debug(f"Element is upload field: {is_upload} (file_inputs: {len(file_inputs)})")
         return is_upload
 
     async def _is_resume_picker(self, element: Any) -> bool:
@@ -1038,33 +977,6 @@ class LinkedInEasyApplier(BaseEasyApplier):
         await async_pause(1, 2)
         logger.info(f"Photo uploaded from generated path: {file_path}")
 
-    async def _detect_already_selected_resume(self, parent: Any) -> bool:
-        """Detect if the is already selected resume in Easy Apply form"""
-        already_selected = False
-        try:
-            sel = ".jobs-document-upload-redesign-card__toggle-label"
-            texts = await parent.locator(sel).evaluate_all(
-                "els => els.map(e => e.textContent || '')"
-            )
-            if not texts:
-                texts = await self.page.locator(sel).evaluate_all(
-                    "els => els.map(e => e.textContent || '')"
-                )
-            for lbl_text in texts:
-                lbl_text = lbl_text.strip()
-                st = sanitize_text(lbl_text)
-                if st.startswith("deselect") and st.endswith(".pdf"):
-                    already_selected = True
-                    logger.info(
-                        f"Resume already selected via toggle label, skipping upload: {lbl_text}"
-                    )
-                    break
-        except Exception:
-            pass
-        if already_selected:
-            return True
-        return False
-
     async def _create_and_upload_cover_letter(self, element: Any, job: Job) -> None:
         logger.info("Starting the process of creating and uploading cover letter.")
 
@@ -1205,9 +1117,6 @@ class LinkedInEasyApplier(BaseEasyApplier):
         # Try different selectors for checkboxes
         checkbox_selectors = [
             "input[type='checkbox']",
-            ".fb-form-element__checkbox",
-            # "[data-test-text-selectable-option__input]",
-            "[data-test-checkbox-form-component] input[type='checkbox']",
         ]
 
         for selector in checkbox_selectors:
@@ -1228,9 +1137,6 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 # Look for question text in various places
                 question_selectors = [
                     "legend",
-                    ".fb-dash-form-element__label",
-                    "[data-test-checkbox-form-title]",
-                    ".jobs-easy-apply-form-section__group-title",
                     # New LinkedIn SDUI markup has no legend/title element; the question
                     # text is a plain <p> preceding the <fieldset> in the widened section,
                     # so it's always the first <p> in document order.
@@ -1476,9 +1382,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
         # Try different selectors for radio buttons
         radio_selectors = [
-            ".fb-text-selectable__option",
             "input[type='radio']",
-            ".artdeco-button--toggle",
             "[role='radio']",
         ]
 
@@ -1570,7 +1474,6 @@ class LinkedInEasyApplier(BaseEasyApplier):
             "input[type='text']",
             "input[type='tel']",
             "textarea",
-            ".artdeco-text-input--input",
         ]
 
         for selector in selectors:
@@ -1582,19 +1485,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
         if text_field:
             # Try to find the label for this field
             try:
-                # Look for label in various ways
-                label = None
-                label_selectors = [
-                    "label",
-                    ".fb-dash-form-element__label",
-                    ".artdeco-text-input--label",
-                    ".jobs-easy-apply-form-section__group-title",
-                ]
-
-                for label_selector in label_selectors:
-                    label = await find_element_safely(section, label_selector, "css selector")
-                    if label:
-                        break
+                label = await find_element_safely(section, "label", "css selector")
 
                 if label:
                     question_text = (await label.text_content() or "").lower().strip()
@@ -1731,24 +1622,11 @@ class LinkedInEasyApplier(BaseEasyApplier):
     async def _find_and_handle_dropdown_question(self, section: Any) -> bool:
         """Handle dropdown questions (async)"""
         try:
-            # Look for dropdowns in the new LinkedIn form structure
             dropdowns = {}
-
-            # Try different selectors for dropdowns
-            dropdown_selectors = [
-                "select",
-                "[data-test-text-entity-list-form-select]",
-                ".fb-dash-form-element__select-dropdown",
-                "select.fb-dash-form-element__select-dropdown",
-            ]
-
-            for selector in dropdown_selectors:
-                _selector = f"css={selector}" if selector == "select" else selector
-                found_dropdowns = await find_elements_safely(section, _selector, "css selector")
-                for dropdown in found_dropdowns:
-                    dropdown_id = await dropdown.get_attribute("id")
-                    if dropdown_id and dropdown_id not in dropdowns:
-                        dropdowns[dropdown_id] = dropdown
+            for dropdown in await find_elements_safely(section, "css=select", "css selector"):
+                dropdown_id = await dropdown.get_attribute("id")
+                if dropdown_id and dropdown_id not in dropdowns:
+                    dropdowns[dropdown_id] = dropdown
 
             # Remove duplicates
             dropdowns = list(dropdowns.values())
@@ -1772,23 +1650,12 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
                 # Try to find the label for this dropdown
                 try:
-                    label_selectors = [
-                        "label",
-                        ".fb-dash-form-element__label",
-                        "[data-test-text-entity-list-form-title]",
-                    ]
-
                     question_text = ""
-                    for label_selector in label_selectors:
-                        # An empty <label> must not end the search - keep going until a
-                        # selector yields actual question text
-                        labels = await find_elements_safely(section, label_selector, "css selector")
-                        for label in labels:
-                            label_text = (await label.text_content() or "").lower().strip()
-                            if label_text:
-                                question_text = self._deduplicate_question_text(label_text)
-                                break
-                        if question_text:
+                    # Skip empty <label>s until one yields actual question text
+                    for label in await find_elements_safely(section, "label", "css selector"):
+                        label_text = (await label.text_content() or "").lower().strip()
+                        if label_text:
+                            question_text = self._deduplicate_question_text(label_text)
                             break
 
                     if not question_text:
@@ -2135,9 +2002,11 @@ class LinkedInEasyApplier(BaseEasyApplier):
 
     async def _find_all_form_errors(self) -> List[str]:
         error_selectors = [
-            ".artdeco-inline-feedback--error .artdeco-inline-feedback__message",
-            ".artdeco-inline-feedback--error",
-            "[role='alert'][data-test-form-element-error-messages]",
+            # Text inputs/textareas: message in the aria-describedby helper; the
+            # character counter in the same helper is the <p> with aria-live
+            _TEXT_FIELD_ERROR_SELECTOR,
+            # Radio/checkbox groups: plain <p> placed right after the <fieldset>
+            "fieldset + p",
         ]
         errors_text: List[str] = []
         seen: set[str] = set()
@@ -2166,105 +2035,24 @@ class LinkedInEasyApplier(BaseEasyApplier):
         logger.debug("Searching for textbox validation errors in the Easy Apply modal")
         results: List[Tuple[Any, str, str]] = []
 
-        form_container_selectors = [
-            "xpath=.//*[contains(@class, 'fb-dash-form-element')]",
-            "div[data-test-form-element]",
-            "[data-test-single-line-text-form-component]",
-            "[data-test-multiline-text-form-component]",
-            "xpath=.//*[contains(@class, 'jobs-easy-apply-form-section__group')]",
-        ]
+        fields = self.page.locator(
+            '[data-testid="dialog-content"] input[type="text"], '
+            '[data-testid="dialog-content"] input[type="tel"], '
+            '[data-testid="dialog-content"] textarea'
+        )
+        error_texts = await fields.evaluate_all(
+            """(els, selector) => els.map(e => {
+                const helper = document.getElementById(e.getAttribute('aria-describedby') || '');
+                return helper?.querySelector(selector)?.textContent.trim() || '';
+            })""",
+            _TEXT_FIELD_ERROR_SELECTOR,
+        )
 
-        for selector in form_container_selectors:
-            try:
-                form_containers = await self.page.locator(selector).all()
-                if form_containers:
-                    logger.debug(
-                        f"Found {len(form_containers)} form containers globally using selector: {selector}"
-                    )
-                    break
-            except Exception:
+        for index, error_text in enumerate(error_texts):
+            if not error_text:
                 continue
-
-        logger.debug(f"Found {len(form_containers)} form containers to inspect for errors")
-
-        for section in form_containers:
-            # Detect an error message within this section
-            error_element: Any | None = None
-            error_text: str = ""
-            try:
-                # Prefer the explicit message span inside the error container
-                error_selectors = [
-                    ".artdeco-inline-feedback--error .artdeco-inline-feedback__message",
-                    ".artdeco-inline-feedback--error",
-                    "[role='alert'][data-test-form-element-error-messages]",
-                ]
-                for selector in error_selectors:
-                    loc = section.locator(selector)
-                    cand_data = await loc.evaluate_all(
-                        "els => els.map((e, i) => ({i, visible: e.offsetParent !== null, text: e.textContent?.trim() || ''}))"
-                    )
-                    match = next((d for d in cand_data if d["visible"] and d["text"]), None)
-                    if match:
-                        error_element = loc.nth(match["i"])
-                        error_text = match["text"]
-                        break
-            except Exception:
-                error_element = None
-
-            if not error_element:
-                continue
-
-            # Find the textbox/textarea to correct within this section
-            target_input: Any | None = None
-            all_inputs_loc = section.locator(
-                "input[type='text'], textarea, .artdeco-text-input--input"
-            )
-            vis_indices = await all_inputs_loc.evaluate_all(
-                "els => els.map((e, i) => e.offsetParent !== null ? i : -1).filter(i => i >= 0)"
-            )
-            if vis_indices:
-                target_input = all_inputs_loc.nth(vis_indices[0])
-
-            if not target_input:
-                # If no visible input found, skip this section
-                logger.debug("Error found but no visible textbox in section; skipping")
-                continue
-
-            # Extract question/label text
-            question_text = ""
-            label: Any | None = None
-            label_selectors = [
-                "label",
-                ".fb-dash-form-element__label",
-                ".artdeco-text-input--label",
-                "[data-test-single-typeahead-entity-form-title='true']",
-            ]
-            for selector in label_selectors:
-                labels = await find_elements_safely(section, selector, "css selector")
-                if labels:
-                    label = labels[0]
-                    break
-
-            if label:
-                try:
-                    question_text = (await label.text_content() or "").lower().strip()
-                    question_text = self._deduplicate_question_text(question_text)
-                except Exception:
-                    question_text = ""
-
-            if not question_text:
-                try:
-                    alt = await target_input.get_attribute(
-                        "aria-label"
-                    ) or await target_input.get_attribute("placeholder")
-                    if alt:
-                        question_text = alt.strip()
-                except Exception:
-                    question_text = ""
-
-            if not question_text:
-                question_text = ""
-
+            target_input = fields.nth(index)
+            question_text = await self._extract_accessible_name(target_input)
             results.append((target_input, question_text, error_text))
 
         logger.debug(f"Textbox errors found: {len(results)}")
