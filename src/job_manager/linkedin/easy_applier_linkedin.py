@@ -281,6 +281,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 return None
 
             easy_apply_selectors = [
+                '//button[@aria-label="Easy Apply to this job"]',
                 '//button[contains(@aria-label, "Easy Apply")]',
                 '//a[contains(., "Apply")]',
             ]

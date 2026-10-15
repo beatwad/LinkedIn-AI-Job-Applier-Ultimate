@@ -62,10 +62,9 @@ class ApplyAgent:
             llm = ChatAnthropic(api_key=self.api_key, model=self.model)
         elif model_type == "ollama":
             if llm_api_url:
-                import os
-
-                os.environ["OLLAMA_BASE_URL"] = llm_api_url
-            llm = ChatOllama(model=self.model, base_url=llm_api_url)
+                llm = ChatOllama(model=self.model, host=llm_api_url)
+            else:
+                llm = ChatOllama(model=self.model)
         elif model_type == "openrouter":
             llm = ChatOpenAI(
                 api_key=self.api_key,
