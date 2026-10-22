@@ -11,7 +11,9 @@ from src.utils.utils import (
     ConfigError,
     clean_structured_resume,
     debug_page_elements,
+    detect_text_language,
     format_missing_fields_display,
+    get_resume_for_job_language,
     get_user_choice_with_timeout,
     load_yaml_file,
     pause,
@@ -628,3 +630,61 @@ class TestCleanStructuredResume:
 
         result = clean_structured_resume(resume)
         assert result == resume  # Should be unchanged
+
+
+PT_DESCRIPTION = (
+    "Estamos procurando uma pessoa desenvolvedora para a nossa equipe, com experiência em Node.js "
+    "e que goste de trabalhar com filas, para atuar na construção de APIs e no desenvolvimento de "
+    "novos produtos em uma empresa que valoriza o trabalho remoto e a colaboração entre os times."
+)
+ES_DESCRIPTION = (
+    "Buscamos una persona desarrolladora para nuestro equipo, con experiencia en Node.js y que le "
+    "guste trabajar con colas, para el desarrollo de APIs y nuevos productos en una empresa que "
+    "valora el trabajo remoto y la colaboración entre los equipos del puesto."
+)
+EN_DESCRIPTION = (
+    "We are looking for a senior engineer to join our team, with experience in Node.js and "
+    "distributed systems, who will be responsible for building APIs and shipping new products "
+    "for our customers in a fully remote company."
+)
+
+
+class TestDetectTextLanguage:
+    """Tests for detect_text_language function"""
+
+    @pytest.mark.parametrize(
+        "text, expected",
+        [(PT_DESCRIPTION, "pt"), (ES_DESCRIPTION, "es"), (EN_DESCRIPTION, "en")],
+    )
+    def test_detects_language(self, text, expected):
+        assert detect_text_language(text) == expected
+
+    def test_returns_none_for_short_text(self):
+        assert detect_text_language("Senior Node.js engineer") is None
+
+
+class TestGetResumeForJobLanguage:
+    """Tests for get_resume_for_job_language function"""
+
+    def test_returns_resume_for_detected_language(self, tmp_path):
+        resume_pt = tmp_path / "resume_pt.pdf"
+        resume_pt.write_bytes(b"pdf")
+        with patch("src.utils.utils.READY_MADE_RESUME_PATHS_BY_LANGUAGE", {"pt": str(resume_pt)}):
+            assert get_resume_for_job_language(PT_DESCRIPTION) == resume_pt.resolve()
+
+    def test_returns_none_when_language_not_configured(self, tmp_path):
+        resume_pt = tmp_path / "resume_pt.pdf"
+        resume_pt.write_bytes(b"pdf")
+        with patch("src.utils.utils.READY_MADE_RESUME_PATHS_BY_LANGUAGE", {"pt": str(resume_pt)}):
+            assert get_resume_for_job_language(EN_DESCRIPTION) is None
+
+    def test_returns_none_when_file_is_missing(self, tmp_path):
+        with patch(
+            "src.utils.utils.READY_MADE_RESUME_PATHS_BY_LANGUAGE",
+            {"pt": str(tmp_path / "missing.pdf")},
+        ):
+            assert get_resume_for_job_language(PT_DESCRIPTION) is None
+
+    def test_returns_none_without_mapping(self):
+        with patch("src.utils.utils.READY_MADE_RESUME_PATHS_BY_LANGUAGE", {}):
+            assert get_resume_for_job_language(PT_DESCRIPTION) is None

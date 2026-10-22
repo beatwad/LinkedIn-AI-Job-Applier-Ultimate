@@ -18,6 +18,11 @@ except ImportError:
     READY_MADE_RESUME_PATH = None
 
 try:
+    from config.app_config import READY_MADE_RESUME_PATHS_BY_LANGUAGE
+except ImportError:
+    READY_MADE_RESUME_PATHS_BY_LANGUAGE = {}
+
+try:
     from config.app_config import READY_MADE_PHOTO_PATH
 except ImportError:
     READY_MADE_PHOTO_PATH = None
@@ -141,6 +146,48 @@ def get_ready_made_resume() -> Path | None:
         return None
     resolved = Path(READY_MADE_RESUME_PATH).resolve()
     return resolved if resolved.is_file() else None
+
+
+_LANGUAGE_STOPWORDS = {
+    "en": set("the and of to with for you our are will experience we is in team".split()),
+    "pt": set(
+        "de e para com uma um em na no os as que vaga experiência você nossa equipe não ou".split()
+    ),
+    "es": set(
+        "de y para con una un en los las que el la experiencia puesto nuestro equipo por se".split()
+    ),
+}
+
+
+def detect_text_language(text: str) -> str | None:
+    """Detect en/pt/es by stopword frequency. Returns None for short or ambiguous text."""
+    words = re.findall(r"[a-zà-úñç]+", text.lower())
+    if len(words) < 30:
+        return None
+    scores = {
+        lang: sum(1 for w in words if w in stop) for lang, stop in _LANGUAGE_STOPWORDS.items()
+    }
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    if ranked[0][1] == 0 or ranked[0][1] == ranked[1][1]:
+        return None
+    return ranked[0][0]
+
+
+def get_resume_for_job_language(text: str) -> Path | None:
+    """Pick the ready-made resume matching the language of `text` (a job description).
+
+    Returns None when the language is unknown or has no resume configured,
+    so the caller can keep its default resume.
+    """
+    lang = detect_text_language(text or "")
+    path = READY_MADE_RESUME_PATHS_BY_LANGUAGE.get(lang) if lang else None
+    if path:
+        resolved = Path(path).resolve()
+        if resolved.is_file():
+            logger.info(f"Detected job language '{lang}', using resume {resolved.name}")
+            return resolved
+        logger.warning(f"Resume for language '{lang}' not found at {resolved}, using default")
+    return None
 
 
 def get_ready_made_photo() -> Path | None:

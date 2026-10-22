@@ -14,6 +14,7 @@
 - `EASY_APPLY_ONLY_MODE` — skip non-Easy Apply jobs (LinkedIn only; Indeed always uses Easy Apply flow)
 - `RESTART_EVERY_DAY` — auto-restart every 24h (LinkedIn only)
 - `READY_MADE_RESUME_PATH` — path to a ready-made resume PDF; if empty, a new resume is generated per vacancy
+- `READY_MADE_RESUME_PATHS_BY_LANGUAGE` — optional `{"en"|"pt"|"es": path}` map; the resume matching the job-description language is uploaded, `READY_MADE_RESUME_PATH` is the fallback
 - `RESUME_STYLE` — style for generated resumes (`"FAANGPath"`, `"Cloyola Grey"`, `"Modern Blue"`, `"Modern Grey"`, `"Default"`, `"Clean Blue"`); `None` prompts interactively
 - `LLM_MODEL_TYPE` — provider: `"gemini"`, `"openai"`, `"openrouter"`, `"claude"`, `"ollama"`
 - `EASY_APPLY_MODEL` — model name for Easy Apply

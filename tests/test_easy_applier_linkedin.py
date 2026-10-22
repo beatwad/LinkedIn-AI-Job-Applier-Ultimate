@@ -576,6 +576,46 @@ class TestUploadFields:
         upload_element.set_input_files.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_uploads_resume_matching_job_language(self, applier, tmp_path):
+        default_resume = tmp_path / "resume_en.pdf"
+        default_resume.write_bytes(b"en")
+        resume_pt = tmp_path / "resume_pt.pdf"
+        resume_pt.write_bytes(b"pt")
+        applier.ready_made_resume_path = default_resume
+        upload_element = AsyncMock()
+
+        job = Job(job_title="Engineer", company_name="Tech", job_description="Vaga em português")
+        with (
+            patch(
+                "src.job_manager.easy_applier.get_resume_for_job_language",
+                return_value=resume_pt,
+            ) as mock_pick,
+            patch("src.job_manager.easy_applier.async_pause", new_callable=AsyncMock),
+        ):
+            await applier._create_and_upload_resume(upload_element, job)
+
+        mock_pick.assert_called_once_with("Vaga em português")
+        upload_element.set_input_files.assert_awaited_once_with(os.path.abspath(str(resume_pt)))
+
+    @pytest.mark.asyncio
+    async def test_uploads_default_resume_when_language_has_no_match(self, applier, tmp_path):
+        default_resume = tmp_path / "resume_en.pdf"
+        default_resume.write_bytes(b"en")
+        applier.ready_made_resume_path = default_resume
+        upload_element = AsyncMock()
+
+        job = Job(job_title="Engineer", company_name="Tech", job_description="Some description")
+        with (
+            patch("src.job_manager.easy_applier.get_resume_for_job_language", return_value=None),
+            patch("src.job_manager.easy_applier.async_pause", new_callable=AsyncMock),
+        ):
+            await applier._create_and_upload_resume(upload_element, job)
+
+        upload_element.set_input_files.assert_awaited_once_with(
+            os.path.abspath(str(default_resume))
+        )
+
+    @pytest.mark.asyncio
     async def test_records_ready_made_resume_path_when_uploaded(self, applier, tmp_path):
         ready_made_resume = tmp_path / "existing.pdf"
         ready_made_resume.write_bytes(b"existing")
