@@ -9,7 +9,14 @@ from httpx import HTTPStatusError
 from config.logger_config import logger
 from src.pydantic_models.job_models import Job, Question
 from src.utils.browser_utils import debug_capture
-from src.utils.utils import ConfigError, async_pause, load_yaml_file, sanitize_text, save_yaml_file
+from src.utils.utils import (
+    ConfigError,
+    async_pause,
+    get_resume_for_job_language,
+    load_yaml_file,
+    sanitize_text,
+    save_yaml_file,
+)
 
 
 class NoInfoException(Exception):
@@ -63,7 +70,10 @@ class BaseEasyApplier(ABC):
             raise
 
         if self.ready_made_resume_path is not None:
-            file_path_pdf = os.path.abspath(str(self.ready_made_resume_path))
+            chosen_resume = (
+                get_resume_for_job_language(job.job_description) or self.ready_made_resume_path
+            )
+            file_path_pdf = os.path.abspath(str(chosen_resume))
             logger.info(f"Using ready-made resume: {file_path_pdf}")
         else:
             generator_ready = (

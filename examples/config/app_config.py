@@ -98,6 +98,18 @@ Example: data/resumes/resume.pdf
 """
 READY_MADE_RESUME_PATH = ""
 """
+Optional: ready-made resume per job-description language ("en", "pt" or "es").
+Used only together with READY_MADE_RESUME_PATH. The language of each vacancy is detected from its
+description; if it is not listed here (or the file is missing), READY_MADE_RESUME_PATH is used.
+Example:
+READY_MADE_RESUME_PATHS_BY_LANGUAGE = {
+    "en": "data/resumes/resume_en.pdf",
+    "pt": "data/resumes/resume_pt.pdf",
+    "es": "data/resumes/resume_es.pdf",
+}
+"""
+READY_MADE_RESUME_PATHS_BY_LANGUAGE = {}
+"""
 Optional path to a photo file for LinkedIn Easy Apply image upload fields.
 If empty string - the bot will try to reuse your visible LinkedIn profile photo.
 """

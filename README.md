@@ -246,6 +246,7 @@ This project enhances the original codebase with several powerful new features:
     *   `EASY_APPLY_MODEL`: Specify the exact model to use for Easy Apply vacancies (e.g., "gemini-2.0-flash").
     *   `APPLY_AGENT_MODEL`: *(LinkedIn only)* Specify the exact agent model to use for Non-Easy Apply vacancies (e.g., "gemini-2.5-flash").
     *   `READY_MADE_RESUME_PATH`: Path to a ready-made resume PDF (e.g. `"data/resumes/resume.pdf"`). If set, the bot uses this file for every application instead of generating a new resume. If empty, a tailored resume is generated for each vacancy.
+    *   `READY_MADE_RESUME_PATHS_BY_LANGUAGE`: Optional mapping of job-description language (`"en"`, `"pt"`, `"es"`) to a ready-made resume PDF. Used together with `READY_MADE_RESUME_PATH`, which stays the fallback.
     *   `RESUME_STYLE`: Resume style to use for generated resumes. If set, skips the interactive style selection prompt. If `None`, prompts interactively (or falls back to default in Docker/headless mode). Possible values: `"FAANGPath"`, `"Cloyola Grey"`, `"Modern Blue"`, `"Modern Grey"`, `"Default"`, `"Clean Blue"`.
 
     **Supported LLM models**
@@ -329,6 +330,7 @@ This project enhances the original codebase with several powerful new features:
     You have two options:
     *   **Automatic Creation (recommended):** Leave `READY_MADE_RESUME_PATH` empty in `config/app_config.py` and the bot will generate a new resume tailored to each vacancy. Generated resumes are stored in `data/resumes/generated_resumes/`. Sections that are the same across vacancies (e.g. header) are generated once and cached in `data/resumes/templates/<section_name>.html`. Delete a cached file to force re-generation.
     *   **Ready-Made Resume:** Set `READY_MADE_RESUME_PATH` in `config/app_config.py` to the path of your resume PDF (e.g. `"data/resumes/resume.pdf"`). The bot will use that file for every application.
+    *   **Ready-Made Resume per language:** If you apply to vacancies written in different languages, also set `READY_MADE_RESUME_PATHS_BY_LANGUAGE` (e.g. `{"en": "data/resumes/resume_en.pdf", "pt": "data/resumes/resume_pt.pdf", "es": "data/resumes/resume_es.pdf"}`). The bot detects the language of each job description (English, Portuguese or Spanish) and uploads the matching file, falling back to `READY_MADE_RESUME_PATH` when the language can't be detected.
 
     **I also recommend to test resume generation before starting applying jobs**.
 
