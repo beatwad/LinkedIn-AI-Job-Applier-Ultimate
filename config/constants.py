@@ -161,6 +161,15 @@ PRICE_DICT: dict[str, dict[str, float]] = {
         "input_cost_per_token": 0.45 / 1_000_000,
         "output_cost_per_token": 0.65 / 1_000_000,
     },
+    # Cheaper Inference
+    "deepseek-v4-flash": {
+        "input_cost_per_token": 0.09 / 1_000_000,
+        "output_cost_per_token": 0.36 / 1_000_000,
+    },
+    "glm-5.3": {
+        "input_cost_per_token": 0.77 / 1_000_000,
+        "output_cost_per_token": 2.42 / 1_000_000,
+    },
 }
 
 
